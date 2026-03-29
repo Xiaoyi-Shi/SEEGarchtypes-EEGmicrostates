@@ -1,0 +1,31 @@
+[project]
+name = "seeg-eegmicrostates"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = 'LIONGAME\LIONGAME', email = "1311096102@qq.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "bctpy>=0.6.1,<0.7",
+    "mne-connectivity>=0.7.0",
+    "mne[full]==1.11",
+    "numpy>=2.4.2",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.1",
+    "pyopengl>=3.1.10",
+]
+
+[project.scripts]
+seeg-eegmicrostates = "seeg_eegmicrostates:main"
+
+[build-system]
+requires = ["uv_build>=0.10.7,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "pytest>=8.4.2",
+]
