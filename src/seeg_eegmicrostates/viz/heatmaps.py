@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 
-def plot_group_effects_heatmap(group_df: pd.DataFrame, output_path: str | Path) -> Path:
+def plot_group_effects_heatmap(group_df: pd.DataFrame, output_path: str | Path, *, title: str = "Group activity effects") -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     figure, axis = plt.subplots(figsize=(8, 4))
@@ -20,7 +20,7 @@ def plot_group_effects_heatmap(group_df: pd.DataFrame, output_path: str | Path) 
         axis.set_xticklabels(pivot.columns, rotation=90)
         axis.set_yticks(range(pivot.shape[0]))
         axis.set_yticklabels(pivot.index)
-        axis.set_title("Group HFA coupling effects")
+        axis.set_title(title)
         figure.colorbar(image, ax=axis, shrink=0.8)
     figure.tight_layout()
     figure.savefig(path, dpi=150)
@@ -70,7 +70,8 @@ def plot_connectivity_effect_matrices(group_df: pd.DataFrame, output_path: str |
     for axis, microstate in zip(axes_list, microstates):
         subset = group_df[group_df["microstate"] == microstate]
         matrix = pd.DataFrame(np.nan, index=networks, columns=networks, dtype=float)
-        np.fill_diagonal(matrix.values, 0.0)
+        for index in range(len(networks)):
+            matrix.iat[index, index] = 0.0
         for row in subset.itertuples(index=False):
             matrix.loc[row.network_a, row.network_b] = float(row.mean_effect)
             matrix.loc[row.network_b, row.network_a] = float(row.mean_effect)
@@ -85,7 +86,7 @@ def plot_connectivity_effect_matrices(group_df: pd.DataFrame, output_path: str |
     if title:
         figure.suptitle(title)
     figure.colorbar(image, ax=axes_list, shrink=0.8, label="Connectivity effect")
-    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96) if title else None)
+    figure.subplots_adjust(left=0.12, right=0.88, bottom=0.18, top=0.88 if title else 0.94, wspace=0.35, hspace=0.35)
     figure.savefig(path, dpi=150)
     plt.close(figure)
     return path

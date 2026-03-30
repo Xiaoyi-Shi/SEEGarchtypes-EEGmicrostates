@@ -12,7 +12,8 @@ from seeg_eegmicrostates.coupling.connectivity import (
     connectivity_analysis_branch,
     normalize_connectivity_method,
 )
-from seeg_eegmicrostates.workflows.pipelines import run_band_limited_connectivity_branch
+from seeg_eegmicrostates.viz.heatmaps import plot_connectivity_effect_matrices
+from seeg_eegmicrostates.workflows.pipelines import run_connectivity_effects_stage
 
 
 def test_compute_subject_microstate_connectivity_effects_detects_state_specific_pairing() -> None:
@@ -51,7 +52,7 @@ def test_connectivity_method_helpers_normalize_and_name_branches() -> None:
     assert connectivity_analysis_branch("plv") == "band_1_40_plv"
 
 
-def test_run_band_limited_connectivity_branch_reuses_cached_outputs(tmp_path: Path) -> None:
+def test_run_connectivity_effects_stage_reuses_cached_outputs(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
     cached = {
         "aligned": cfg.cache_path("coupling", "aligned_connectivity", ext="parquet", branch="band_1_40_plv"),
@@ -60,8 +61,22 @@ def test_run_band_limited_connectivity_branch_reuses_cached_outputs(tmp_path: Pa
     }
     for path in cached.values():
         write_dataframe(pd.DataFrame({"value": [1]}), path)
-    outputs = run_band_limited_connectivity_branch(cfg, method="plv")
+    outputs = run_connectivity_effects_stage(cfg, method="plv")
     for key, path in cached.items():
         assert outputs[key] == path
     assert outputs["subject_effects_excel"].exists()
     assert outputs["group_effects_excel"].exists()
+
+
+def test_plot_connectivity_effect_matrices_writes_output(tmp_path: Path) -> None:
+    group_df = pd.DataFrame(
+        {
+            "method": ["corr", "corr"],
+            "microstate": [0, 0],
+            "network_a": ["ContA", "ContA"],
+            "network_b": ["ContB", "DefaultB"],
+            "mean_effect": [0.2, -0.1],
+        }
+    )
+    output = plot_connectivity_effect_matrices(group_df, tmp_path / "connectivity.png", title="Connectivity")
+    assert output.exists()

@@ -42,6 +42,10 @@ from seeg_eegmicrostates.viz import (
 )
 
 
+_BAND_BRANCH = "band_1_40"
+_ACTIVITY_BRANCH = "band_1_40_activity"
+
+
 def build_index_artifacts(cfg: AnalysisConfig) -> dict[str, Path]:
     cfg.ensure_runtime_directories()
     patient_info, annotation_info = load_workbook_tables(cfg.workbook_path)
@@ -89,6 +93,17 @@ def _write_table_reports_from_paths(cfg: AnalysisConfig, paths: dict[str, Path],
     return _write_table_reports(cfg, tables, branch=branch)
 
 
+def _long_activity_frame(aligned_wide_df: pd.DataFrame, *, patient_id: str) -> pd.DataFrame:
+    long = aligned_wide_df.melt(
+        id_vars=["patient_id", "time_sec", "microstate", "corr"],
+        var_name="network",
+        value_name="value",
+    )
+    if "patient_id" not in long.columns:
+        long.insert(0, "patient_id", patient_id)
+    return long.dropna(subset=["value"]).reset_index(drop=True)
+
+
 def run_eeg_microstate_branch(cfg: AnalysisConfig, *, branch: str = "main") -> dict[str, Path]:
     cfg.ensure_runtime_directories()
     cached = {
@@ -123,6 +138,10 @@ def run_eeg_microstate_branch(cfg: AnalysisConfig, *, branch: str = "main") -> d
     labels_path = write_dataframe(labels, cfg.cache_path("eeg", "microstate_labels", ext="parquet", branch=branch))
     missing_path = write_dataframe(pd.DataFrame(missing_rows), cfg.cache_path("eeg", "restored_channels", ext="parquet", branch=branch))
     return {"model": model_path, "labels": labels_path, "restored_channels": missing_path}
+
+
+def run_eeg_states_stage(cfg: AnalysisConfig) -> dict[str, Path]:
+    return run_eeg_microstate_branch(cfg, branch=_BAND_BRANCH)
 
 
 def run_seeg_hfa_branch(cfg: AnalysisConfig) -> dict[str, Path]:
@@ -189,6 +208,67 @@ def run_seeg_band_limited_network_branch(cfg: AnalysisConfig) -> dict[str, Path]
     return {
         "mapping": write_dataframe(mapping, cached["mapping"]),
         "coverage": write_dataframe(coverage, cached["coverage"]),
+    }
+
+
+def run_seeg_networks_stage(cfg: AnalysisConfig) -> dict[str, Path]:
+    return run_seeg_band_limited_network_branch(cfg)
+
+
+def run_activity_effects_stage(cfg: AnalysisConfig) -> dict[str, Path]:
+    cfg.ensure_runtime_directories()
+    cached = {
+        "aligned": cfg.cache_path("coupling", "aligned_activity", ext="parquet", branch=_ACTIVITY_BRANCH),
+        "subject_effects": cfg.cache_path("coupling", "subject_activity_effects", ext="parquet", branch=_ACTIVITY_BRANCH),
+        "group_effects": cfg.cache_path("stats", "group_activity_effects", ext="parquet", branch=_ACTIVITY_BRANCH),
+    }
+    if _all_exist(cached):
+        table_reports = _write_table_reports_from_paths(
+            cfg,
+            {
+                "subject_activity_effects": cached["subject_effects"],
+                "group_activity_effects": cached["group_effects"],
+            },
+            branch=_ACTIVITY_BRANCH,
+        )
+        return {
+            **cached,
+            "subject_effects_excel": table_reports["subject_activity_effects"],
+            "group_effects_excel": table_reports["group_activity_effects"],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    _ = run_seeg_networks_stage(cfg)
+    cohort = _eligible_rows(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    aligned_frames: list[pd.DataFrame] = []
+    for row in cohort.to_dict(orient="records"):
+        patient_id = str(row["patient_id"])
+        label_df = eeg_labels[eeg_labels["patient_id"] == patient_id]
+        network_df = read_dataframe(
+            cfg.cache_path("seeg", "network_band_limited", ext="parquet", branch=_BAND_BRANCH, patient_id=patient_id)
+        )
+        aligned_wide = align_network_timeseries_to_labels(label_df, network_df, patient_id=patient_id)
+        aligned_frames.append(_long_activity_frame(aligned_wide, patient_id=patient_id))
+    aligned_df = pd.concat(aligned_frames, ignore_index=True) if aligned_frames else pd.DataFrame()
+    aligned_path = write_dataframe(aligned_df, cached["aligned"])
+    subject_effects = compute_subject_microstate_network_effects(aligned_df)
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_permutation_statistics(subject_effects, seed=cfg.random_seed)
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    table_reports = _write_table_reports(
+        cfg,
+        {
+            "subject_activity_effects": subject_effects,
+            "group_activity_effects": group_effects,
+        },
+        branch=_ACTIVITY_BRANCH,
+    )
+    return {
+        "aligned": aligned_path,
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": table_reports["subject_activity_effects"],
+        "group_effects_excel": table_reports["group_activity_effects"],
     }
 
 
@@ -293,15 +373,15 @@ def run_band_limited_connectivity_branch(cfg: AnalysisConfig, *, method: str = "
             "subject_effects_excel": table_reports["subject_connectivity_effects"],
             "group_effects_excel": table_reports["group_connectivity_effects"],
         }
-    eeg_outputs = run_eeg_microstate_branch(cfg, branch="band_1_40")
-    _ = run_seeg_band_limited_network_branch(cfg)
+    eeg_outputs = run_eeg_states_stage(cfg)
+    _ = run_seeg_networks_stage(cfg)
     cohort = _eligible_rows(cfg)
     eeg_labels = read_dataframe(eeg_outputs["labels"])
     aligned_frames: list[pd.DataFrame] = []
     for row in cohort.to_dict(orient="records"):
         patient_id = str(row["patient_id"])
         label_df = eeg_labels[eeg_labels["patient_id"] == patient_id]
-        network_path = cfg.cache_path("seeg", "network_band_limited", ext="parquet", branch="band_1_40", patient_id=patient_id)
+        network_path = cfg.cache_path("seeg", "network_band_limited", ext="parquet", branch=_BAND_BRANCH, patient_id=patient_id)
         network_df = read_dataframe(network_path)
         aligned_frames.append(align_network_timeseries_to_labels(label_df, network_df, patient_id=patient_id))
     aligned_df = pd.concat(aligned_frames, ignore_index=True) if aligned_frames else pd.DataFrame()
@@ -334,6 +414,10 @@ def run_band_limited_connectivity_branch(cfg: AnalysisConfig, *, method: str = "
         "subject_effects_excel": table_reports["subject_connectivity_effects"],
         "group_effects_excel": table_reports["group_connectivity_effects"],
     }
+
+
+def run_connectivity_effects_stage(cfg: AnalysisConfig, *, method: str = "all") -> dict[str, Path]:
+    return run_band_limited_connectivity_branch(cfg, method=method)
 
 
 def run_hfa_coupling_branch(cfg: AnalysisConfig) -> dict[str, Path]:
@@ -394,54 +478,40 @@ def run_hfa_coupling_branch(cfg: AnalysisConfig) -> dict[str, Path]:
 def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
     cfg.ensure_runtime_directories()
     outputs: dict[str, Path] = {}
-    coverage_path = cfg.cache_path("seeg", "network_coverage", ext="parquet", branch="hfa")
+    coverage_path = cfg.cache_path("seeg", "network_coverage", ext="parquet", branch=_BAND_BRANCH)
     if coverage_path.exists():
         coverage_df = read_dataframe(coverage_path)
-        outputs["coverage"] = plot_coverage_summary(coverage_df, cfg.report_path("network_coverage", ext="png", branch="hfa"))
-    model_path = cfg.cache_path("eeg", "group_microstate_model", ext="npz", branch="main")
+        outputs["coverage"] = plot_coverage_summary(
+            coverage_df,
+            cfg.report_path("network_coverage", ext="png", branch=_BAND_BRANCH),
+        )
+    model_path = cfg.cache_path("eeg", "group_microstate_model", ext="npz", branch=_BAND_BRANCH)
     if model_path.exists():
         from seeg_eegmicrostates.eeg.microstates import load_microstate_model
 
         outputs["microstates"] = plot_microstate_templates(
             load_microstate_model(model_path),
-            cfg.report_path("microstate_templates", ext="png", branch="main"),
+            cfg.report_path("microstate_templates", ext="png", branch=_BAND_BRANCH),
         )
-    group_path = cfg.cache_path("stats", "group_effects", ext="parquet", branch="hfa")
-    if group_path.exists():
-        outputs["group_heatmap"] = plot_group_effects_heatmap(
-            read_dataframe(group_path),
-            cfg.report_path("group_effects", ext="png", branch="hfa"),
+    activity_group_path = cfg.cache_path("stats", "group_activity_effects", ext="parquet", branch=_ACTIVITY_BRANCH)
+    if activity_group_path.exists():
+        outputs["activity_heatmap"] = plot_group_effects_heatmap(
+            read_dataframe(activity_group_path),
+            cfg.report_path("activity_effects", ext="png", branch=_ACTIVITY_BRANCH),
+            title="Supplemental band-limited activity effects",
         )
-    subject_path = cfg.cache_path("coupling", "subject_effects", ext="parquet", branch="hfa")
-    if subject_path.exists() and group_path.exists():
+    activity_subject_path = cfg.cache_path("coupling", "subject_activity_effects", ext="parquet", branch=_ACTIVITY_BRANCH)
+    if activity_subject_path.exists() and activity_group_path.exists():
         table_reports = _write_table_reports_from_paths(
             cfg,
             {
-                "hfa_subject_effects": subject_path,
-                "hfa_group_effects": group_path,
+                "subject_activity_effects": activity_subject_path,
+                "group_activity_effects": activity_group_path,
             },
-            branch="hfa",
+            branch=_ACTIVITY_BRANCH,
         )
-        outputs["hfa_subject_effects_excel"] = table_reports["hfa_subject_effects"]
-        outputs["hfa_group_effects_excel"] = table_reports["hfa_group_effects"]
-    cross_modal_path = cfg.cache_path("coupling", "cross_modal_summary", ext="parquet", branch="band_1_40")
-    if cross_modal_path.exists():
-        outputs["cross_modal"] = plot_cross_modal_overlap(
-            read_dataframe(cross_modal_path),
-            cfg.report_path("cross_modal_overlap", ext="png", branch="band_1_40"),
-        )
-    contingency_path = cfg.cache_path("coupling", "cross_modal_contingency", ext="parquet", branch="band_1_40")
-    if contingency_path.exists() and cross_modal_path.exists():
-        table_reports = _write_table_reports_from_paths(
-            cfg,
-            {
-                "cross_modal_contingency": contingency_path,
-                "cross_modal_summary": cross_modal_path,
-            },
-            branch="band_1_40",
-        )
-        outputs["cross_modal_contingency_excel"] = table_reports["cross_modal_contingency"]
-        outputs["cross_modal_summary_excel"] = table_reports["cross_modal_summary"]
+        outputs["activity_subject_effects_excel"] = table_reports["subject_activity_effects"]
+        outputs["activity_group_effects_excel"] = table_reports["group_activity_effects"]
     for method in ("corr", "plv", "wpli"):
         branch = connectivity_analysis_branch(method)
         connectivity_path = cfg.cache_path("stats", "group_connectivity_effects", ext="parquet", branch=branch)

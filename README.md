@@ -1,9 +1,11 @@
 # SEEG-EEG Microstates
 
-This repository contains a cached, function-oriented analysis pipeline for studying synchronized scalp EEG and intracranial SEEG microstates in the `IDE_A` resting-state segment. The current implementation focuses on two branches:
+This repository contains a cached, staged analysis pipeline for studying synchronized scalp EEG microstates and intracranial SEEG Yeo17 network dynamics in the `IDE_A` resting-state segment. The public workflow is centered on a single `1-40 Hz` path:
 
-- EEG microstates from restored 19-channel scalp EEG and SEEG Yeo17-network HFA coupling
-- Cross-modal EEG/SEEG microstate comparison in the `1-40 Hz` band
+- `1-40 Hz` EEG microstate state generation
+- `1-40 Hz` SEEG Yeo17 network signal generation
+- supplemental EEG-state-conditioned activity effects
+- primary EEG-state-conditioned connectivity effects (`corr`, `PLV`, `wPLI`)
 
 The code is organized for recomputation from intermediate artifacts rather than notebook-only analysis.
 
@@ -31,31 +33,29 @@ The project requires Python `>=3.13` and uses `mne`, `pycrostates`, `pandas`, an
 
 ```bash
 uv run seeg-eegmicrostates build-index
-uv run seeg-eegmicrostates run-eeg --branch main
-uv run seeg-eegmicrostates run-seeg-hfa
-uv run seeg-eegmicrostates run-hfa-coupling
-uv run seeg-eegmicrostates run-band-1-40
-uv run seeg-eegmicrostates run-band-1-40-connectivity --method all
+uv run seeg-eegmicrostates run-eeg-states
+uv run seeg-eegmicrostates run-seeg-networks
+uv run seeg-eegmicrostates run-activity-effects
+uv run seeg-eegmicrostates run-connectivity-effects --method all
 uv run seeg-eegmicrostates render-reports
 ```
 
 What each command does:
 
 - `build-index`: scans recordings, loads workbook metadata, builds `IDE_A` segments, and filters the main cohort.
-- `run-eeg`: preprocesses EEG, restores 19 channels, fits group microstate templates, and writes label tables.
-- `run-seeg-hfa`: maps bipolar channels to same-network Yeo17 pairs and computes HFA/network summaries.
-- `run-hfa-coupling`: aligns EEG labels with network HFA and computes subject/group effects.
-- `run-band-1-40`: runs the parallel `1-40 Hz` EEG and SEEG microstate branch with cross-modal summaries.
-- `run-band-1-40-connectivity`: estimates EEG-state-conditioned Yeo17 network connectivity from cached `1-40 Hz` SEEG network time series using `corr`, `PLV`, or `wPLI`.
+- `run-eeg-states`: preprocesses EEG, restores 19 channels, fits `1-40 Hz` EEG microstate templates, and writes reusable state labels.
+- `run-seeg-networks`: maps bipolar channels to same-network Yeo17 pairs and computes reusable `1-40 Hz` network time series.
+- `run-activity-effects`: computes supplemental EEG-state-conditioned Yeo17 activity effects from the staged caches.
+- `run-connectivity-effects`: computes primary EEG-state-conditioned Yeo17 network connectivity effects from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
 - `render-reports`: writes QC figures and summary plots from cached results.
 
 ## Outputs
 
 Artifacts are written under:
 
-- `artifacts/cache/`: indexed tables, preprocessed FIF files, label tables, network summaries, and statistics
-- `artifacts/reports/figures/`: coverage plots, microstate templates, HFA heatmaps, and cross-modal overlap figures
-- `artifacts/reports/tables/`: Excel exports of cross-modal summaries and subject/group effect tables
+- `artifacts/cache/`: indexed tables, preprocessed FIF files, label tables, staged network summaries, and statistics
+- `artifacts/reports/figures/`: coverage plots, `1-40 Hz` microstate templates, supplemental activity heatmaps, and primary connectivity figures
+- `artifacts/reports/tables/`: Excel exports of supplemental activity and primary connectivity result tables
 
 Cache filenames are branch-specific and include a config hash so parameter changes do not silently overwrite earlier runs.
 
