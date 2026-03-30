@@ -1,0 +1,11 @@
+from .coverage import plot_coverage_summary
+from .heatmaps import plot_connectivity_effect_matrices, plot_cross_modal_overlap, plot_group_effects_heatmap
+from .microstates import plot_microstate_templates
+
+__all__ = [
+    "plot_connectivity_effect_matrices",
+    "plot_coverage_summary",
+    "plot_cross_modal_overlap",
+    "plot_group_effects_heatmap",
+    "plot_microstate_templates",
+]

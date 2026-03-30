@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=2.4.2",
     "openpyxl>=3.1.5",
     "pandas>=3.0.1",
+    "pycrostates>=0.6.1",
     "pyopengl>=3.1.10",
 ]
 

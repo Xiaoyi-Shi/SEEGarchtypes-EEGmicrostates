@@ -7,6 +7,9 @@ wheels/
 *.egg-info
 .codex/
 .pytest_cache/
+datas/
+artifacts/
+results/
 
 # Virtual environments
 .venv
