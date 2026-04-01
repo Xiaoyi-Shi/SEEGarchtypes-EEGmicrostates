@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy.cluster.vq import kmeans2
 from scipy.signal import find_peaks
 
-from seeg_eegmicrostates._utils import contiguous_runs, zscore_columns
+from seeg_eegmicrostates._utils import contiguous_runs, ensure_directory, zscore_columns
 from seeg_eegmicrostates.config import AnalysisConfig
 
 
@@ -107,3 +109,10 @@ def fit_network_microstates(
         }
     )
     return model, labels_df
+
+
+def save_network_microstate_model(model: dict[str, object], path: str | Path) -> Path:
+    output_path = Path(path)
+    ensure_directory(output_path.parent)
+    np.savez(output_path, **model)
+    return output_path

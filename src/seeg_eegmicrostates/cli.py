@@ -20,7 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("build-index", help="Scan IDE_A assets and build the eligible cohort index.")
-    subparsers.add_parser("run-eeg-states", help="Generate reusable 1-40 Hz EEG microstate states.")
+    eeg_parser = subparsers.add_parser("run-eeg-states", help="Generate reusable 1-40 Hz EEG microstate states.")
+    eeg_parser.add_argument(
+        "--template-fif",
+        help="Reuse a pycrostates ModKMeans .fif template file instead of fitting a new EEG template set.",
+    )
     subparsers.add_parser("run-seeg-networks", help="Generate reusable 1-40 Hz SEEG Yeo17 network signals.")
     subparsers.add_parser("run-activity-effects", help="Compute supplemental EEG-state-conditioned Yeo17 activity effects.")
     connectivity_parser = subparsers.add_parser(
@@ -39,7 +43,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "build-index":
         outputs = build_index_artifacts(cfg)
     elif args.command == "run-eeg-states":
-        outputs = run_eeg_states_stage(cfg)
+        outputs = run_eeg_states_stage(cfg, template_fif=args.template_fif)
     elif args.command == "run-seeg-networks":
         outputs = run_seeg_networks_stage(cfg)
     elif args.command == "run-activity-effects":

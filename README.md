@@ -34,6 +34,7 @@ The project requires Python `>=3.13` and uses `mne`, `pycrostates`, `pandas`, an
 ```bash
 uv run seeg-eegmicrostates build-index
 uv run seeg-eegmicrostates run-eeg-states
+uv run seeg-eegmicrostates run-eeg-states --template-fif path/to/group_template.fif
 uv run seeg-eegmicrostates run-seeg-networks
 uv run seeg-eegmicrostates run-activity-effects
 uv run seeg-eegmicrostates run-connectivity-effects --method all
@@ -43,18 +44,21 @@ uv run seeg-eegmicrostates render-reports
 What each command does:
 
 - `build-index`: scans recordings, loads workbook metadata, builds `IDE_A` segments, and filters the main cohort.
-- `run-eeg-states`: preprocesses EEG, restores 19 channels, fits `1-40 Hz` EEG microstate templates, and writes reusable state labels.
+- `run-eeg-states`: preprocesses EEG, restores 19 channels, fits `1-40 Hz` EEG microstate templates or loads an external `pycrostates` `ModKMeans` `.fif` template file, and writes reusable state labels.
 - `run-seeg-networks`: maps bipolar channels to same-network Yeo17 pairs and computes reusable `1-40 Hz` network time series.
 - `run-activity-effects`: computes supplemental EEG-state-conditioned Yeo17 activity effects from the staged caches.
 - `run-connectivity-effects`: computes primary EEG-state-conditioned Yeo17 network connectivity effects from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
 - `render-reports`: writes QC figures and summary plots from cached results.
+
+The `--template-fif` option replaces fitting with a whole-template override. The supplied file must be a compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow.
 
 ## Outputs
 
 Artifacts are written under:
 
 - `artifacts/cache/`: indexed tables, preprocessed FIF files, label tables, staged network summaries, and statistics
-- `artifacts/reports/figures/`: coverage plots, `1-40 Hz` microstate templates, supplemental activity heatmaps, and primary connectivity figures
+- `artifacts/cache/eeg/`: includes the canonical staged EEG `group_microstate_model_*.fif` artifact and the downstream microstate label tables derived from that active template
+- `artifacts/reports/figures/`: coverage plots, `1-40 Hz` EEG microstate topographic maps, supplemental activity heatmaps, and primary connectivity figures
 - `artifacts/reports/tables/`: Excel exports of supplemental activity and primary connectivity result tables
 
 Cache filenames are branch-specific and include a config hash so parameter changes do not silently overwrite earlier runs.

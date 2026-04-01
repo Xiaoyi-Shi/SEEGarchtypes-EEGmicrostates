@@ -5,10 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from pycrostates.cluster import ModKMeans
-from pycrostates.io import ChData
+from pycrostates.io import ChData, read_cluster
 from pycrostates.preprocessing import extract_gfp_peaks
 
-from seeg_eegmicrostates._utils import contiguous_runs, ensure_directory
+from seeg_eegmicrostates._utils import ensure_directory
 from seeg_eegmicrostates.config import AnalysisConfig
 
 
@@ -48,8 +48,8 @@ def fit_group_microstate_model(
     cfg: AnalysisConfig,
     *,
     branch: str,
-) -> dict[str, object]:
-    first_patient_id = next(iter(sorted(preprocessed_raws)))
+) -> ModKMeans:
+    _ = branch
     peak_sets: list[ChData] = []
     for offset, patient_id in enumerate(sorted(preprocessed_raws)):
         peaks = extract_subject_gfp_peaks(preprocessed_raws[patient_id], cfg)
@@ -63,81 +63,79 @@ def fit_group_microstate_model(
         random_state=cfg.random_seed,
     )
     estimator.fit(pooled, picks="all")
-    return {
-        "branch": branch,
-        "channel_names": np.asarray(pooled.info["ch_names"]),
-        "cluster_centers": np.asarray(estimator.cluster_centers_),
-        "cluster_names": np.asarray(estimator.cluster_names),
-        "gev": float(estimator.GEV_),
-        "n_clusters": int(cfg.microstate_k),
-        "sfreq": float(preprocessed_raws[first_patient_id].info["sfreq"]),
-        "random_seed": int(cfg.random_seed),
-    }
+    return estimator
 
 
-def save_microstate_model(model: dict[str, object], path: str | Path) -> Path:
+def save_microstate_model(model: ModKMeans, path: str | Path) -> Path:
     output_path = Path(path)
     ensure_directory(output_path.parent)
-    np.savez(output_path, **model)
+    model.save(output_path)
     return output_path
 
 
-def load_microstate_model(path: str | Path) -> dict[str, object]:
-    with np.load(Path(path), allow_pickle=False) as payload:
-        return {key: payload[key] for key in payload.files}
+def load_microstate_model(path: str | Path) -> ModKMeans:
+    model = read_cluster(Path(path))
+    if not isinstance(model, ModKMeans):
+        raise TypeError(f"Expected a ModKMeans template file, got {type(model).__name__}.")
+    return model
 
 
-def _absolute_correlation_labels(data: np.ndarray, templates: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def validate_microstate_model_channels(
+    model: ModKMeans,
+    expected_channels: tuple[str, ...],
+    *,
+    alternate_channels: tuple[str, ...] | None = None,
+) -> None:
+    model_channels = tuple(str(name) for name in model.info["ch_names"])
+    allowed_layouts = [tuple(expected_channels)]
+    if alternate_channels is not None:
+        allowed_layouts.append(tuple(alternate_channels))
+    allowed_sets = [set(layout) for layout in allowed_layouts]
+    if any(set(model_channels) == allowed for allowed in allowed_sets):
+        return
+    layout_names = ["restored 19-channel EEG layout"]
+    if alternate_channels is not None:
+        layout_names.insert(0, "shared 11-channel EEG layout")
+    raise ValueError(
+        "Template file is incompatible with the allowed EEG template layouts. "
+        f"Supported layouts: {', '.join(layout_names)}. "
+        f"Found channels: {', '.join(model_channels)}."
+    )
+
+
+def _absolute_correlation_scores(data: np.ndarray, templates: np.ndarray) -> np.ndarray:
     centered_data = data - data.mean(axis=0, keepdims=True)
     centered_templates = templates - templates.mean(axis=1, keepdims=True)
     data_norm = np.linalg.norm(centered_data, axis=0)
     template_norm = np.linalg.norm(centered_templates, axis=1)
     denominator = np.outer(template_norm, data_norm)
     denominator[denominator == 0] = 1.0
-    correlations = np.abs(centered_templates @ centered_data / denominator)
-    labels = correlations.argmax(axis=0)
-    scores = correlations.max(axis=0)
-    return labels.astype(int), scores.astype(float)
+    return np.abs(centered_templates @ centered_data / denominator)
 
 
-def smooth_microstate_labels(labels: np.ndarray, min_segment_length: int) -> np.ndarray:
-    if min_segment_length <= 1:
-        return labels.copy()
-    smoothed = labels.copy()
-    changed = True
-    while changed:
-        changed = False
-        for start, end, label in contiguous_runs(smoothed):
-            run_length = end - start
-            if run_length >= min_segment_length:
-                continue
-            previous_label = smoothed[start - 1] if start > 0 else None
-            next_label = smoothed[end] if end < smoothed.size else None
-            replacement = None
-            if previous_label is not None and next_label is not None and previous_label == next_label:
-                replacement = int(previous_label)
-            elif previous_label is not None:
-                replacement = int(previous_label)
-            elif next_label is not None:
-                replacement = int(next_label)
-            if replacement is not None and replacement != label:
-                smoothed[start:end] = replacement
-                changed = True
-    return smoothed
-
-
-def label_microstates(raw19, model: dict[str, object], cfg: AnalysisConfig, *, patient_id: str) -> pd.DataFrame:
-    templates = np.asarray(model["cluster_centers"], dtype=float)
-    data = raw19.get_data(picks="all")
-    labels, scores = _absolute_correlation_labels(data, templates)
+def label_microstates(raw19, model: ModKMeans, cfg: AnalysisConfig, *, patient_id: str) -> pd.DataFrame:
     min_samples = max(1, int(round(cfg.min_microstate_duration_ms * raw19.info["sfreq"] / 1000.0)))
-    smoothed = smooth_microstate_labels(labels, min_samples)
+    segmentation = model.predict(
+        raw19,
+        factor=0,
+        min_segment_length=min_samples,
+        reject_edges=False,
+        reject_by_annotation=True,
+    )
+    labels = segmentation.labels.astype(int)
+    data = raw19.get_data(picks=model.info["ch_names"])
+    scores = _absolute_correlation_scores(data, model.cluster_centers_)
+    confidence = np.full(labels.shape, np.nan, dtype=float)
+    valid = labels >= 0
+    if np.any(valid):
+        indices = np.flatnonzero(valid)
+        confidence[indices] = scores[labels[indices], indices]
     return pd.DataFrame(
         {
             "patient_id": patient_id,
             "time_sec": raw19.times.astype(float),
             "sample": np.arange(raw19.n_times, dtype=int),
-            "microstate": smoothed.astype(int),
-            "corr": scores.astype(float),
+            "microstate": labels,
+            "corr": confidence,
         }
     )

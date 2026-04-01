@@ -11,27 +11,7 @@ The system SHALL allow the public EEG state generation stage to accept an extern
 - **WHEN** a user supplies an external template file to the public EEG state generation stage
 - **THEN** the staged workflow SHALL use that template file for EEG labeling while keeping downstream cache locations compatible with the rest of the public workflow
 
-### Requirement: The public CLI SHALL expose a focused staged `1-40 Hz` workflow
-The system SHALL expose a public command surface centered on the staged `1-40 Hz` analysis workflow rather than multiple co-equal experimental branches.
-
-#### Scenario: User inspects the available public commands
-- **WHEN** a user requests CLI help
-- **THEN** the public commands SHALL map to staged workflow steps for index preparation, EEG state generation, SEEG network generation, activity effects, connectivity effects, and report rendering
-
-#### Scenario: Legacy branch-centric commands are retired from the public workflow
-- **WHEN** the streamlined CLI is released
-- **THEN** legacy public commands for `main` EEG, HFA coupling, and cross-modal overlap SHALL no longer define the primary public workflow
-
-### Requirement: Each public stage SHALL persist reusable intermediate artifacts
-The system SHALL persist stage outputs so users can rerun downstream analysis steps without recomputing upstream stages.
-
-#### Scenario: Upstream EEG state artifacts already exist
-- **WHEN** a downstream activity or connectivity stage runs after EEG state artifacts were already generated
-- **THEN** the downstream stage SHALL reuse the cached EEG state artifacts rather than recomputing them
-
-#### Scenario: User debugs a downstream method change
-- **WHEN** a user reruns connectivity effects after changing only the connectivity method or downstream statistics
-- **THEN** the workflow SHALL allow the user to reuse the existing index, EEG state, and SEEG network caches
+## MODIFIED Requirements
 
 ### Requirement: Reports SHALL be exported from staged analysis results
 The system SHALL export figures and table outputs from the staged workflow into report directories without requiring users to manually transform cached results, and SHALL render EEG microstate figures from the native staged `pycrostates` model artifact when it is available.

@@ -26,3 +26,10 @@ def test_cli_hides_legacy_public_commands() -> None:
         except SystemExit:
             continue
         raise AssertionError(f"Legacy command {command} should not remain in the public CLI.")
+
+
+def test_run_eeg_states_accepts_template_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["run-eeg-states", "--template-fif", "template.fif"])
+    assert args.command == "run-eeg-states"
+    assert args.template_fif == "template.fif"

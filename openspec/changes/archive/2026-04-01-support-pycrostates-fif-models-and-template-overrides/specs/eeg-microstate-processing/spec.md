@@ -11,6 +11,8 @@ The system SHALL allow the band-limited EEG state stage to load a user-supplied 
 - **WHEN** the user supplies a template file whose fitted channels are incompatible with both the shared 11-channel montage and the restored 19-channel EEG representation supported by the stage
 - **THEN** the system SHALL stop before labeling and SHALL report a clear compatibility error
 
+## MODIFIED Requirements
+
 ### Requirement: Band-limited EEG state generation SHALL be the public default EEG stage
 The system SHALL expose EEG microstate generation for the focused workflow as a standalone staged operation that produces reusable `1-40 Hz` EEG state artifacts, including a standard `pycrostates` `ModKMeans` `.fif` model artifact, for downstream analyses.
 

@@ -19,8 +19,10 @@ from seeg_eegmicrostates.coupling import (
 from seeg_eegmicrostates.eeg import (
     fit_group_microstate_model,
     label_microstates,
+    load_microstate_model,
     preprocess_eeg_recording,
     save_microstate_model,
+    validate_microstate_model_channels,
 )
 from seeg_eegmicrostates.io import load_atlas_table, load_workbook_tables, save_raw_fif, scan_repository
 from seeg_eegmicrostates.qc import build_main_cohort
@@ -30,6 +32,7 @@ from seeg_eegmicrostates.seeg import (
     compute_hfa_envelope,
     fit_network_microstates,
     load_and_crop_bipolar_seeg,
+    save_network_microstate_model,
 )
 from seeg_eegmicrostates.segment import build_ide_a_segments
 from seeg_eegmicrostates.stats import run_group_connectivity_statistics, run_group_permutation_statistics
@@ -104,14 +107,19 @@ def _long_activity_frame(aligned_wide_df: pd.DataFrame, *, patient_id: str) -> p
     return long.dropna(subset=["value"]).reset_index(drop=True)
 
 
-def run_eeg_microstate_branch(cfg: AnalysisConfig, *, branch: str = "main") -> dict[str, Path]:
+def run_eeg_microstate_branch(
+    cfg: AnalysisConfig,
+    *,
+    branch: str = "main",
+    template_fif: str | Path | None = None,
+) -> dict[str, Path]:
     cfg.ensure_runtime_directories()
     cached = {
-        "model": cfg.cache_path("eeg", "group_microstate_model", ext="npz", branch=branch),
+        "model": cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch=branch),
         "labels": cfg.cache_path("eeg", "microstate_labels", ext="parquet", branch=branch),
         "restored_channels": cfg.cache_path("eeg", "restored_channels", ext="parquet", branch=branch),
     }
-    if _all_exist(cached):
+    if template_fif is None and _all_exist(cached):
         return cached
     cohort = _eligible_rows(cfg)
     band = cfg.eeg_microstate_band if branch == "main" else cfg.band_limited_range
@@ -129,8 +137,16 @@ def run_eeg_microstate_branch(cfg: AnalysisConfig, *, branch: str = "main") -> d
         preprocessed_raws[patient_id] = raw19
         save_raw_fif(raw19, cfg.cache_path("eeg", "preprocessed", ext="fif", branch=branch, patient_id=patient_id))
         missing_rows.append({"patient_id": patient_id, "branch": branch, "restored_channels": list(missing)})
-    model = fit_group_microstate_model(preprocessed_raws, cfg, branch=branch)
-    model_path = save_microstate_model(model, cfg.cache_path("eeg", "group_microstate_model", ext="npz", branch=branch))
+    if template_fif is None:
+        model = fit_group_microstate_model(preprocessed_raws, cfg, branch=branch)
+    else:
+        model = load_microstate_model(template_fif)
+        validate_microstate_model_channels(
+            model,
+            cfg.target19_channels,
+            alternate_channels=cfg.standard11_channels,
+        )
+    model_path = save_microstate_model(model, cached["model"])
     labels = pd.concat(
         [label_microstates(raw, model, cfg, patient_id=patient_id) for patient_id, raw in preprocessed_raws.items()],
         ignore_index=True,
@@ -140,8 +156,8 @@ def run_eeg_microstate_branch(cfg: AnalysisConfig, *, branch: str = "main") -> d
     return {"model": model_path, "labels": labels_path, "restored_channels": missing_path}
 
 
-def run_eeg_states_stage(cfg: AnalysisConfig) -> dict[str, Path]:
-    return run_eeg_microstate_branch(cfg, branch=_BAND_BRANCH)
+def run_eeg_states_stage(cfg: AnalysisConfig, *, template_fif: str | Path | None = None) -> dict[str, Path]:
+    return run_eeg_microstate_branch(cfg, branch=_BAND_BRANCH, template_fif=template_fif)
 
 
 def run_seeg_hfa_branch(cfg: AnalysisConfig) -> dict[str, Path]:
@@ -308,7 +324,10 @@ def run_band_limited_cross_modal_branch(cfg: AnalysisConfig) -> dict[str, Path]:
         )
         model, seeg_labels = fit_network_microstates(network_df, cfg, patient_id=patient_id)
         label_frames.append(seeg_labels)
-        save_microstate_model(model, cfg.cache_path("seeg", "network_microstate_model", ext="npz", branch="band_1_40", patient_id=patient_id))
+        save_network_microstate_model(
+            model,
+            cfg.cache_path("seeg", "network_microstate_model", ext="npz", branch="band_1_40", patient_id=patient_id),
+        )
     seeg_labels_df = pd.concat(label_frames, ignore_index=True) if label_frames else pd.DataFrame()
     seeg_labels_path = write_dataframe(seeg_labels_df, cfg.cache_path("seeg", "network_microstate_labels", ext="parquet", branch="band_1_40"))
     eeg_labels = read_dataframe(eeg_outputs["labels"])
@@ -485,10 +504,8 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             coverage_df,
             cfg.report_path("network_coverage", ext="png", branch=_BAND_BRANCH),
         )
-    model_path = cfg.cache_path("eeg", "group_microstate_model", ext="npz", branch=_BAND_BRANCH)
+    model_path = cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch=_BAND_BRANCH)
     if model_path.exists():
-        from seeg_eegmicrostates.eeg.microstates import load_microstate_model
-
         outputs["microstates"] = plot_microstate_templates(
             load_microstate_model(model_path),
             cfg.report_path("microstate_templates", ext="png", branch=_BAND_BRANCH),
