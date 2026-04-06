@@ -58,13 +58,13 @@ def _pairwise_connectivity(
     *,
     method: str,
 ) -> dict[tuple[int, int], float]:
-    n_networks = matrix.shape[1]
+    n_regions = matrix.shape[1]
     results: dict[tuple[int, int], float] = {}
     normalized = normalize_connectivity_method(method)
-    if matrix.shape[0] < 2 or n_networks < 2:
+    if matrix.shape[0] < 2 or n_regions < 2:
         return results
     if normalized == "corr":
-        for left_index, right_index in combinations(range(n_networks), 2):
+        for left_index, right_index in combinations(range(n_regions), 2):
             value = _absolute_correlation(matrix[:, left_index], matrix[:, right_index])
             if np.isnan(value):
                 continue
@@ -72,7 +72,7 @@ def _pairwise_connectivity(
         return results
 
     metric = _phase_locking_value if normalized == "plv" else _weighted_phase_lag_index
-    for left_index, right_index in combinations(range(n_networks), 2):
+    for left_index, right_index in combinations(range(n_regions), 2):
         value = metric(matrix[:, left_index], matrix[:, right_index])
         if np.isnan(value):
             continue
@@ -91,10 +91,10 @@ def compute_subject_microstate_connectivity_effects(
         return pd.DataFrame(rows)
     normalized = normalize_connectivity_method(method)
     for patient_id, group in aligned_df.groupby("patient_id"):
-        network_columns = [column for column in group.columns if column not in _META_COLUMNS]
-        if len(network_columns) < 2:
+        region_columns = [column for column in group.columns if column not in _META_COLUMNS]
+        if len(region_columns) < 2:
             continue
-        values = group[network_columns].to_numpy(dtype=float)
+        values = group[region_columns].to_numpy(dtype=float)
         phase_ready_values = hilbert(values, axis=0) if normalized in {"plv", "wpli"} else values
         labels = group["microstate"].to_numpy(dtype=int)
         for microstate in sorted(group["microstate"].unique()):
@@ -104,7 +104,7 @@ def compute_subject_microstate_connectivity_effects(
                 continue
             state_connectivity = _pairwise_connectivity(state_values, method=normalized)
             off_connectivity = _pairwise_connectivity(off_values, method=normalized)
-            for left_index, right_index in combinations(range(len(network_columns)), 2):
+            for left_index, right_index in combinations(range(len(region_columns)), 2):
                 pair_key = (left_index, right_index)
                 if pair_key not in state_connectivity or pair_key not in off_connectivity:
                     continue
@@ -115,8 +115,8 @@ def compute_subject_microstate_connectivity_effects(
                         "patient_id": str(patient_id),
                         "method": normalized,
                         "microstate": int(microstate),
-                        "network_a": str(network_columns[left_index]),
-                        "network_b": str(network_columns[right_index]),
+                        "region_a": str(region_columns[left_index]),
+                        "region_b": str(region_columns[right_index]),
                         "state_connectivity": float(state_value),
                         "off_connectivity": float(off_value),
                         "effect_mean_diff": float(state_value - off_value),
@@ -125,3 +125,110 @@ def compute_subject_microstate_connectivity_effects(
                     }
                 )
     return pd.DataFrame(rows)
+
+
+def compute_subject_microstate_connectivity_profiles(
+    aligned_df: pd.DataFrame,
+    *,
+    min_samples: int,
+    method: str,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if aligned_df.empty:
+        return pd.DataFrame(rows)
+    normalized = normalize_connectivity_method(method)
+    for patient_id, group in aligned_df.groupby("patient_id"):
+        region_columns = [column for column in group.columns if column not in _META_COLUMNS]
+        if len(region_columns) < 2:
+            continue
+        values = group[region_columns].to_numpy(dtype=float)
+        phase_ready_values = hilbert(values, axis=0) if normalized in {"plv", "wpli"} else values
+        labels = group["microstate"].to_numpy(dtype=int)
+        for microstate in sorted(group["microstate"].unique()):
+            state_values = phase_ready_values[labels == microstate]
+            if state_values.shape[0] < min_samples:
+                continue
+            state_connectivity = _pairwise_connectivity(state_values, method=normalized)
+            for left_index, right_index in combinations(range(len(region_columns)), 2):
+                pair_key = (left_index, right_index)
+                if pair_key not in state_connectivity:
+                    continue
+                rows.append(
+                    {
+                        "patient_id": str(patient_id),
+                        "method": normalized,
+                        "microstate": int(microstate),
+                        "region_a": str(region_columns[left_index]),
+                        "region_b": str(region_columns[right_index]),
+                        "state_connectivity": float(state_connectivity[pair_key]),
+                        "n_state_samples": int(state_values.shape[0]),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def compute_subject_event_locked_connectivity_effects(
+    event_df: pd.DataFrame,
+    region_df: pd.DataFrame,
+    *,
+    patient_id: str,
+    window_sec: float,
+    min_samples: int,
+    method: str,
+    event_keys: tuple[str, ...],
+    event_time_column: str = "event_sec",
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if event_df.empty or region_df.empty:
+        return pd.DataFrame(rows)
+    normalized = normalize_connectivity_method(method)
+    region_columns = [column for column in region_df.columns if column != "time_sec"]
+    if len(region_columns) < 2:
+        return pd.DataFrame(rows)
+    times = region_df["time_sec"].to_numpy(dtype=float)
+    values = region_df[region_columns].to_numpy(dtype=float)
+    for event in event_df.itertuples(index=False):
+        event_sec = float(getattr(event, event_time_column))
+        pre_values = values[(times >= event_sec - window_sec) & (times < event_sec)]
+        post_values = values[(times >= event_sec) & (times < event_sec + window_sec)]
+        if pre_values.shape[0] < min_samples or post_values.shape[0] < min_samples:
+            continue
+        if normalized in {"plv", "wpli"}:
+            pre_values = hilbert(pre_values, axis=0)
+            post_values = hilbert(post_values, axis=0)
+        post_connectivity = _pairwise_connectivity(post_values, method=normalized)
+        pre_connectivity = _pairwise_connectivity(pre_values, method=normalized)
+        for left_index, right_index in combinations(range(len(region_columns)), 2):
+            pair_key = (left_index, right_index)
+            if pair_key not in post_connectivity or pair_key not in pre_connectivity:
+                continue
+            row = {
+                "patient_id": str(patient_id),
+                "method": normalized,
+                "region_a": str(region_columns[left_index]),
+                "region_b": str(region_columns[right_index]),
+                "state_connectivity": float(post_connectivity[pair_key]),
+                "off_connectivity": float(pre_connectivity[pair_key]),
+                "effect_mean_diff": float(post_connectivity[pair_key] - pre_connectivity[pair_key]),
+                "n_state_samples": int(post_values.shape[0]),
+                "n_nonstate_samples": int(pre_values.shape[0]),
+            }
+            for key in event_keys:
+                row[key] = getattr(event, key)
+            rows.append(row)
+    event_effects = pd.DataFrame(rows)
+    if event_effects.empty:
+        return event_effects
+    group_keys = ["patient_id", "method", *event_keys, "region_a", "region_b"]
+    return (
+        event_effects.groupby(group_keys, as_index=False)
+        .agg(
+            n_events=("effect_mean_diff", "size"),
+            state_connectivity=("state_connectivity", "mean"),
+            off_connectivity=("off_connectivity", "mean"),
+            effect_mean_diff=("effect_mean_diff", "mean"),
+            n_state_samples=("n_state_samples", "mean"),
+            n_nonstate_samples=("n_nonstate_samples", "mean"),
+        )
+        .reset_index(drop=True)
+    )

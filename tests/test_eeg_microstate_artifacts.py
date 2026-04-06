@@ -125,7 +125,7 @@ def test_run_eeg_states_stage_uses_external_template_without_refitting(tmp_path:
     monkeypatch.setattr(pipelines, "_eligible_rows", lambda _: _stub_cohort())
     monkeypatch.setattr(pipelines, "preprocess_eeg_recording", lambda *args, **kwargs: (raw.copy(), ()))
     monkeypatch.setattr(pipelines, "save_raw_fif", _touch_raw_cache)
-    monkeypatch.setattr(pipelines, "fit_group_microstate_model", fail_fit)
+    monkeypatch.setattr(pipelines, "fit_group_microstate_model", fail_fit, raising=False)
 
     outputs = run_eeg_states_stage(cfg, template_fif=str(external_path))
     labels = read_dataframe(outputs["labels"])
@@ -135,6 +135,37 @@ def test_run_eeg_states_stage_uses_external_template_without_refitting(tmp_path:
     assert outputs["model"].exists()
     assert labels["patient_id"].tolist() == ["sub-01"] * raw.n_times
     assert tuple(staged_model.info["ch_names"]) == cfg.standard11_channels
+
+
+def test_run_eeg_states_stage_uses_default_template_without_refitting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
+    raw = _make_raw(cfg)
+    default_model = _fit_model(_make_raw(cfg, cfg.target19_channels), cfg)
+    save_microstate_model(default_model, cfg.default_eeg_template_fif)
+    fit_calls = {"count": 0}
+
+    def fail_fit(*args, **kwargs):
+        fit_calls["count"] += 1
+        raise AssertionError("fit_group_microstate_model should not run when the default template is configured.")
+
+    monkeypatch.setattr(pipelines, "_eligible_rows", lambda _: _stub_cohort())
+    monkeypatch.setattr(pipelines, "preprocess_eeg_recording", lambda *args, **kwargs: (raw.copy(), ()))
+    monkeypatch.setattr(pipelines, "save_raw_fif", _touch_raw_cache)
+    monkeypatch.setattr(pipelines, "fit_group_microstate_model", fail_fit, raising=False)
+
+    outputs = run_eeg_states_stage(cfg)
+    labels = read_dataframe(outputs["labels"])
+    staged_model = load_microstate_model(outputs["model"])
+    assert fit_calls["count"] == 0
+    assert outputs["model"].exists()
+    assert labels["patient_id"].tolist() == ["sub-01"] * raw.n_times
+    assert tuple(staged_model.info["ch_names"]) == cfg.target19_channels
+
+
+def test_run_eeg_states_stage_requires_default_template_when_no_override(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
+    with pytest.raises(FileNotFoundError, match="default EEG template"):
+        run_eeg_states_stage(cfg)
 
 
 def test_run_eeg_states_stage_rejects_incompatible_external_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

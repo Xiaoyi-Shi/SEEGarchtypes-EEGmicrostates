@@ -8,6 +8,7 @@ import pandas as pd
 from seeg_eegmicrostates._utils import write_dataframe
 from seeg_eegmicrostates.config import AnalysisConfig
 from seeg_eegmicrostates.coupling.connectivity import (
+    compute_subject_event_locked_connectivity_effects,
     compute_subject_microstate_connectivity_effects,
     connectivity_analysis_branch,
     normalize_connectivity_method,
@@ -28,17 +29,17 @@ def test_compute_subject_microstate_connectivity_effects_detects_state_specific_
             "time_sec": np.arange(160, dtype=float) / 100.0,
             "microstate": np.concatenate([np.zeros(80, dtype=int), np.ones(80, dtype=int)]),
             "corr": np.ones(160, dtype=float),
-            "DefaultA": np.concatenate([strong, weak_a]),
-            "DefaultB": np.concatenate([strong_shifted, weak_b]),
-            "LimbicB": rng.standard_normal(160),
+            "Right Hippocampus": np.concatenate([strong, weak_a]),
+            "Right Amygdala": np.concatenate([strong_shifted, weak_b]),
+            "Left Hippocampus": rng.standard_normal(160),
         }
     )
     for method in ("corr", "plv", "wpli"):
         effects = compute_subject_microstate_connectivity_effects(aligned, min_samples=20, method=method)
         pair = effects[
             (effects["microstate"] == 0)
-            & (effects["network_a"] == "DefaultA")
-            & (effects["network_b"] == "DefaultB")
+            & (effects["region_a"] == "Right Hippocampus")
+            & (effects["region_b"] == "Right Amygdala")
         ].iloc[0]
         assert pair["method"] == method
         assert pair["state_connectivity"] > pair["off_connectivity"]
@@ -56,16 +57,18 @@ def test_run_connectivity_effects_stage_reuses_cached_outputs(tmp_path: Path) ->
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
     cached = {
         "aligned": cfg.cache_path("coupling", "aligned_connectivity", ext="parquet", branch="band_1_40_plv"),
-        "subject_effects": cfg.cache_path("coupling", "subject_connectivity_effects", ext="parquet", branch="band_1_40_plv"),
-        "group_effects": cfg.cache_path("stats", "group_connectivity_effects", ext="parquet", branch="band_1_40_plv"),
+        "subject_profiles": cfg.cache_path("coupling", "subject_connectivity_profiles", ext="parquet", branch="band_1_40_plv"),
+        "group_omnibus": cfg.cache_path("stats", "group_connectivity_omnibus", ext="parquet", branch="band_1_40_plv"),
+        "group_posthoc": cfg.cache_path("stats", "group_connectivity_posthoc", ext="parquet", branch="band_1_40_plv"),
     }
     for path in cached.values():
         write_dataframe(pd.DataFrame({"value": [1]}), path)
     outputs = run_connectivity_effects_stage(cfg, method="plv")
     for key, path in cached.items():
         assert outputs[key] == path
-    assert outputs["subject_effects_excel"].exists()
-    assert outputs["group_effects_excel"].exists()
+    assert outputs["subject_profiles_excel"].exists()
+    assert outputs["group_omnibus_excel"].exists()
+    assert outputs["group_posthoc_excel"].exists()
 
 
 def test_plot_connectivity_effect_matrices_writes_output(tmp_path: Path) -> None:
@@ -73,10 +76,42 @@ def test_plot_connectivity_effect_matrices_writes_output(tmp_path: Path) -> None
         {
             "method": ["corr", "corr"],
             "microstate": [0, 0],
-            "network_a": ["ContA", "ContA"],
-            "network_b": ["ContB", "DefaultB"],
+            "region_a": ["Right Hippocampus", "Right Hippocampus"],
+            "region_b": ["Right Amygdala", "Left Hippocampus"],
             "mean_effect": [0.2, -0.1],
         }
     )
     output = plot_connectivity_effect_matrices(group_df, tmp_path / "connectivity.png", title="Connectivity")
     assert output.exists()
+
+
+def test_compute_subject_event_locked_connectivity_effects_detects_pre_post_changes() -> None:
+    region_df = pd.DataFrame(
+        {
+            "time_sec": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+            "Right Hippocampus": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            "Right Amygdala": [0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0],
+            "Left Hippocampus": [1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0],
+        }
+    )
+    event_df = pd.DataFrame({"event_sec": [0.4], "microstate": [1]})
+
+    effects = compute_subject_event_locked_connectivity_effects(
+        event_df,
+        region_df,
+        patient_id="sub-01",
+        window_sec=0.4,
+        min_samples=4,
+        method="corr",
+        event_keys=("microstate",),
+    )
+
+    pair = effects[
+        (effects["microstate"] == 1)
+        & (effects["region_a"] == "Right Hippocampus")
+        & (effects["region_b"] == "Right Amygdala")
+    ].iloc[0]
+    assert pair["method"] == "corr"
+    assert pair["n_events"] == 1
+    assert pair["state_connectivity"] > pair["off_connectivity"]
+    assert pair["effect_mean_diff"] > 0

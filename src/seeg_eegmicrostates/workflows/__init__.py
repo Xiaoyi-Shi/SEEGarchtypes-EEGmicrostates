@@ -4,7 +4,8 @@ from .pipelines import (
     run_activity_effects_stage,
     run_connectivity_effects_stage,
     run_eeg_states_stage,
-    run_seeg_networks_stage,
+    run_exploratory_coupling_stage,
+    run_seeg_regions_stage,
 )
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "run_activity_effects_stage",
     "run_connectivity_effects_stage",
     "run_eeg_states_stage",
-    "run_seeg_networks_stage",
+    "run_exploratory_coupling_stage",
+    "run_seeg_regions_stage",
 ]

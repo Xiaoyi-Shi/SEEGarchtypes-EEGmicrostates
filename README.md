@@ -1,11 +1,11 @@
 # SEEG-EEG Microstates
 
-This repository contains a cached, staged analysis pipeline for studying synchronized scalp EEG microstates and intracranial SEEG Yeo17 network dynamics in the `IDE_A` resting-state segment. The public workflow is centered on a single `1-40 Hz` path:
+This repository contains a cached, staged analysis pipeline for studying synchronized scalp EEG microstates and intracranial SEEG `AAL3` region dynamics in the `IDE_A` resting-state segment. The public workflow is centered on a single `1-40 Hz` path:
 
 - `1-40 Hz` EEG microstate state generation
-- `1-40 Hz` SEEG Yeo17 network signal generation
-- supplemental EEG-state-conditioned activity effects
-- primary EEG-state-conditioned connectivity effects (`corr`, `PLV`, `wPLI`)
+- `1-40 Hz` SEEG `AAL3` region signal generation
+- EEG-state-conditioned `AAL3` activity profiles plus four-state omnibus/post-hoc outputs
+- EEG-state-conditioned `AAL3` connectivity profiles plus four-state omnibus/post-hoc outputs (`corr`, `PLV`, `wPLI`)
 
 The code is organized for recomputation from intermediate artifacts rather than notebook-only analysis.
 
@@ -23,7 +23,7 @@ The default configuration expects:
 ## Setup
 
 ```bash
-uv sync
+uv sync --dev
 uv run pytest -q
 ```
 
@@ -35,31 +35,65 @@ The project requires Python `>=3.13` and uses `mne`, `pycrostates`, `pandas`, an
 uv run seeg-eegmicrostates build-index
 uv run seeg-eegmicrostates run-eeg-states
 uv run seeg-eegmicrostates run-eeg-states --template-fif path/to/group_template.fif
-uv run seeg-eegmicrostates run-seeg-networks
+uv run seeg-eegmicrostates run-seeg-regions
 uv run seeg-eegmicrostates run-activity-effects
 uv run seeg-eegmicrostates run-connectivity-effects --method all
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis all
 uv run seeg-eegmicrostates render-reports
 ```
 
 What each command does:
 
 - `build-index`: scans recordings, loads workbook metadata, builds `IDE_A` segments, and filters the main cohort.
-- `run-eeg-states`: preprocesses EEG, restores 19 channels, fits `1-40 Hz` EEG microstate templates or loads an external `pycrostates` `ModKMeans` `.fif` template file, and writes reusable state labels.
-- `run-seeg-networks`: maps bipolar channels to same-network Yeo17 pairs and computes reusable `1-40 Hz` network time series.
-- `run-activity-effects`: computes supplemental EEG-state-conditioned Yeo17 activity effects from the staged caches.
-- `run-connectivity-effects`: computes primary EEG-state-conditioned Yeo17 network connectivity effects from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
-- `render-reports`: writes QC figures and summary plots from cached results.
+- `run-eeg-states`: preprocesses EEG, restores 19 channels, loads the default `pycrostates` `ModKMeans` template at `artifacts/cache/eeg/ModK.fif`, caches a copy of the active template as `group_microstate_model_*`, and writes reusable state labels.
+- `run-seeg-regions`: maps bipolar channels to same-region `AAL3` pairs, rescales them onto the shared `250 Hz` analysis grid, and computes reusable raw-scale `1-40 Hz` region time series.
+- `run-activity-effects`: computes EEG-state-conditioned `AAL3` activity profiles together with four-state omnibus and pairwise post-hoc summaries from the staged caches.
+- `run-connectivity-effects`: computes primary EEG-state-conditioned `AAL3` region connectivity profiles together with omnibus and pairwise post-hoc summaries from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
+- `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels and `AAL3` region signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, or `all`.
+- `render-reports`: writes QC figures and Excel exports from cached results.
 
-The `--template-fif` option replaces fitting with a whole-template override. The supplied file must be a compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow.
+By default, EEG state staging uses `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow.
+
+Exploratory analyses are intentionally opt-in and do not change the default staged pipeline. Useful examples:
+
+```bash
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis event-activity --event-window-sec 1.5
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis event-connectivity --method plv --event-window-sec 1.0
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis windowed-coupling --window-sec 20
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-coupling --min-subjects 7
+```
+
+The exploratory stages share staged EEG event and transition tables, write branch-hashed cache artifacts, and are picked up automatically by `render-reports` when their caches are present.
+
+To rerun the main workflow from scratch, execute the commands in order:
+
+```bash
+uv run seeg-eegmicrostates build-index
+uv run seeg-eegmicrostates run-eeg-states
+uv run seeg-eegmicrostates run-seeg-regions
+uv run seeg-eegmicrostates run-activity-effects
+uv run seeg-eegmicrostates run-connectivity-effects --method all
+uv run seeg-eegmicrostates render-reports
+```
 
 ## Outputs
 
 Artifacts are written under:
 
-- `artifacts/cache/`: indexed tables, preprocessed FIF files, label tables, staged network summaries, and statistics
-- `artifacts/cache/eeg/`: includes the canonical staged EEG `group_microstate_model_*.fif` artifact and the downstream microstate label tables derived from that active template
-- `artifacts/reports/figures/`: coverage plots, `1-40 Hz` EEG microstate topographic maps, supplemental activity heatmaps, and primary connectivity figures
-- `artifacts/reports/tables/`: Excel exports of supplemental activity and primary connectivity result tables
+- `artifacts/cache/`: reusable indexed tables, preprocessed FIF files, label tables, staged region summaries, and statistics
+- `artifacts/cache/coupling/` and `artifacts/cache/stats/`: also hold exploratory event-locked, windowed, and transition summaries under hashed `explore_*` branches
+- `artifacts/cache/seeg/`: includes staged `AAL3` region mappings, coverage tables, and per-patient `1-40 Hz` region time series used by downstream activity and connectivity stages
+- `artifacts/cache/eeg/`: includes the active EEG template copy `group_microstate_model_*.fif`, preprocessed FIF files, restored-channel tables, and downstream microstate label tables
+- `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/figures/`: figures produced by a specific CLI command invocation
+- `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/tables/`: Excel exports produced by a specific CLI command invocation
+- `artifacts/runs/<YYYYMMDD_HHMMSS>/logs/`: per-command logs with command, timing, config hash, and output paths
+
+Each CLI command gets its own timestamped run directory. A full end-to-end pipeline therefore creates multiple sibling folders under `artifacts/runs/`, while cache reuse is still keyed only by the branch-specific config hash.
+
+In practice:
+
+- `build-index`, `run-eeg-states`, `run-seeg-regions`, `run-activity-effects`, and `run-connectivity-effects` primarily update `artifacts/cache/` and write a command log
+- `render-reports` reads the existing caches and emits the user-facing figures and Excel tables under its own run directory
 
 Cache filenames are branch-specific and include a config hash so parameter changes do not silently overwrite earlier runs.
 
@@ -67,7 +101,7 @@ Cache filenames are branch-specific and include a config hash so parameter chang
 
 - `src/seeg_eegmicrostates/io`: workbook, FIF, atlas, and repository scanning helpers
 - `src/seeg_eegmicrostates/eeg`: EEG preprocessing, montage restoration, and `pycrostates` model fitting
-- `src/seeg_eegmicrostates/seeg`: bipolar mapping, HFA extraction, network aggregation, and SEEG microstates
+- `src/seeg_eegmicrostates/seeg`: bipolar mapping, region aggregation, and SEEG preprocessing helpers
 - `src/seeg_eegmicrostates/coupling` and `stats`: alignment, effect estimation, permutation testing, and FDR correction
 - `src/seeg_eegmicrostates/workflows`: cache-aware pipeline entry points used by the CLI
 
