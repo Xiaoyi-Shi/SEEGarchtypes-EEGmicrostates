@@ -46,7 +46,13 @@ TARGET19_CHANNELS: tuple[str, ...] = (
 
 SEEG_PARCELLATION_NAME = "aal3"
 SEEG_PARCELLATION_COLUMN = "AAL3"
+YEO7_PARCELLATION_NAME = "yeo7"
+YEO7_PARCELLATION_COLUMN = "cortex_319663V:Schaefer_200_7net"
+YEO17_PARCELLATION_NAME = "yeo17"
+YEO17_PARCELLATION_COLUMN = "cortex_319663V:Schaefer_200_17net"
 DEFAULT_EEG_TEMPLATE_RELPATH = Path("cache/eeg/ModK.fif")
+DEFAULT_ANALYSIS_STATE = "IDE_A"
+SUPPORTED_ANALYSIS_STATES: tuple[str, ...] = ("IDE_A", "IDE_S")
 
 
 def _sanitize_branch(value: str) -> str:
@@ -63,6 +69,7 @@ class AnalysisConfig:
     workbook_path: Path = Path("datas/info_patient.xlsx")
     artifact_root: Path = Path("artifacts")
     run_timestamp: str = field(default_factory=_default_run_timestamp)
+    analysis_state: str = DEFAULT_ANALYSIS_STATE
     default_eeg_template_relpath: Path = DEFAULT_EEG_TEMPLATE_RELPATH
     eeg_montage_name: str = "standard_1020"
     band_limited_range: tuple[float, float] = (1.0, 40.0)
@@ -81,6 +88,19 @@ class AnalysisConfig:
     seeg_parcellation_column: str = SEEG_PARCELLATION_COLUMN
     standard11_channels: tuple[str, ...] = field(default=STANDARD11_CHANNELS)
     target19_channels: tuple[str, ...] = field(default=TARGET19_CHANNELS)
+
+    def __post_init__(self) -> None:
+        normalized_state = str(self.analysis_state).strip().upper()
+        if normalized_state not in SUPPORTED_ANALYSIS_STATES:
+            supported = ", ".join(SUPPORTED_ANALYSIS_STATES)
+            raise ValueError(f"Unsupported analysis_state '{self.analysis_state}'. Expected one of: {supported}.")
+        object.__setattr__(self, "analysis_state", normalized_state)
+        normalized_parcellation = str(self.seeg_parcellation_name).strip().lower()
+        object.__setattr__(self, "seeg_parcellation_name", normalized_parcellation)
+        if normalized_parcellation == YEO7_PARCELLATION_NAME and self.seeg_parcellation_column == SEEG_PARCELLATION_COLUMN:
+            object.__setattr__(self, "seeg_parcellation_column", YEO7_PARCELLATION_COLUMN)
+        if normalized_parcellation == YEO17_PARCELLATION_NAME and self.seeg_parcellation_column == SEEG_PARCELLATION_COLUMN:
+            object.__setattr__(self, "seeg_parcellation_column", YEO17_PARCELLATION_COLUMN)
 
     @property
     def cache_root(self) -> Path:
@@ -107,12 +127,31 @@ class AnalysisConfig:
         return self.artifact_root / self.default_eeg_template_relpath
 
     @property
+    def analysis_state_token(self) -> str:
+        return self.branch_name(self.analysis_state)
+
+    @property
+    def parcellation_display_name(self) -> str:
+        if self.seeg_parcellation_name == YEO7_PARCELLATION_NAME:
+            return "Yeo7"
+        if self.seeg_parcellation_name == YEO17_PARCELLATION_NAME:
+            return "Yeo17"
+        if self.seeg_parcellation_name == SEEG_PARCELLATION_NAME:
+            return "AAL3"
+        return self.seeg_parcellation_name
+
+    @property
+    def parcellation_unit_label(self) -> str:
+        return "network" if self.seeg_parcellation_name in {YEO7_PARCELLATION_NAME, YEO17_PARCELLATION_NAME} else "region"
+
+    @property
     def runtime_hash(self) -> str:
         return config_hash(
             {
                 "data_root": self.data_root,
                 "workbook_path": self.workbook_path,
                 "artifact_root": self.artifact_root,
+                "analysis_state": self.analysis_state,
                 "default_eeg_template_relpath": self.default_eeg_template_relpath,
                 "eeg_montage_name": self.eeg_montage_name,
                 "band_limited_range": self.band_limited_range,
@@ -134,14 +173,11 @@ class AnalysisConfig:
             }
         )
 
-    def ensure_runtime_directories(self) -> dict[str, Path]:
+    def ensure_cache_directories(self) -> dict[str, Path]:
         directories = {
             "artifact_root": ensure_directory(self.artifact_root),
             "cache_root": ensure_directory(self.cache_root),
             "runs_root": ensure_directory(self.runs_root),
-            "run_root": ensure_directory(self.run_root),
-            "reports_root": ensure_directory(self.reports_root),
-            "logs_root": ensure_directory(self.logs_root),
         }
         for subdir in (
             "index",
@@ -153,8 +189,11 @@ class AnalysisConfig:
             "reports",
         ):
             directories[subdir] = ensure_directory(self.cache_root / subdir)
-        for subdir in ("qc", "tables", "figures"):
-            directories[f"reports_{subdir}"] = ensure_directory(self.reports_root / subdir)
+        return directories
+
+    def ensure_runtime_directories(self) -> dict[str, Path]:
+        directories = self.ensure_cache_directories()
+        directories["run_root"] = ensure_directory(self.run_root)
         return directories
 
     def branch_name(self, branch: str) -> str:

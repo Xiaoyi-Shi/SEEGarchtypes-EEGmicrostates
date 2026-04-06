@@ -4,7 +4,13 @@ import argparse
 from datetime import datetime
 import traceback
 
-from seeg_eegmicrostates.config import AnalysisConfig
+from seeg_eegmicrostates.config import (
+    AnalysisConfig,
+    DEFAULT_ANALYSIS_STATE,
+    SEEG_PARCELLATION_COLUMN,
+    SEEG_PARCELLATION_NAME,
+    SUPPORTED_ANALYSIS_STATES,
+)
 from seeg_eegmicrostates.workflows import (
     build_index_artifacts,
     render_reports,
@@ -25,27 +31,53 @@ _EXPLORATORY_ANALYSIS_CHOICES = (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    state_parent = argparse.ArgumentParser(add_help=False)
+    state_parent.add_argument(
+        "--analysis-state",
+        default=DEFAULT_ANALYSIS_STATE,
+        choices=list(SUPPORTED_ANALYSIS_STATES),
+        help="Select which IDE segment to analyze. Defaults to IDE_A.",
+    )
+    state_parent.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional shared run directory name. Reuse the same value across staged commands to collect logs and reports under one artifacts/runs/<run-id>/ folder.",
+    )
+    parcellation_parent = argparse.ArgumentParser(add_help=False)
+    parcellation_parent.add_argument(
+        "--seeg-parcellation-name",
+        default=SEEG_PARCELLATION_NAME,
+        help="SEEG parcellation backend name. Use 'aal3', 'yeo7', 'yeo17', or provide a custom label.",
+    )
+    parcellation_parent.add_argument(
+        "--seeg-parcellation-column",
+        default=SEEG_PARCELLATION_COLUMN,
+        help="Atlas.tsv column used for SEEG parcellation labels.",
+    )
     parser = argparse.ArgumentParser(
         prog="seeg-eegmicrostates",
-        description="Staged 1-40 Hz EEG/SEEG microstate analysis for IDE_A.",
+        description="Staged 1-40 Hz EEG/SEEG microstate analysis for configurable IDE segments with default AAL3 SEEG parcellation.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("build-index", help="Scan IDE_A assets and build the eligible cohort index.")
-    eeg_parser = subparsers.add_parser("run-eeg-states", help="Generate reusable 1-40 Hz EEG microstate states.")
+    common_parents = [state_parent, parcellation_parent]
+    subparsers.add_parser("build-index", parents=common_parents, help="Scan IDE assets and build the eligible cohort index.")
+    eeg_parser = subparsers.add_parser("run-eeg-states", parents=common_parents, help="Generate reusable 1-40 Hz EEG microstate states.")
     eeg_parser.add_argument(
         "--template-fif",
         help="Override the default EEG microstate template file (defaults to artifacts/cache/eeg/ModK.fif).",
     )
-    subparsers.add_parser("run-seeg-regions", help="Generate reusable 1-40 Hz SEEG AAL3 region signals.")
-    subparsers.add_parser("run-activity-effects", help="Compute supplemental EEG-state-conditioned AAL3 activity effects.")
+    subparsers.add_parser("run-seeg-regions", parents=common_parents, help="Generate reusable 1-40 Hz SEEG parcellation signals.")
+    subparsers.add_parser("run-activity-effects", parents=common_parents, help="Compute supplemental EEG-state-conditioned SEEG activity effects.")
     connectivity_parser = subparsers.add_parser(
         "run-connectivity-effects",
-        help="Compute primary EEG-state-conditioned AAL3 region connectivity effects.",
+        parents=common_parents,
+        help="Compute primary EEG-state-conditioned SEEG connectivity effects.",
     )
     connectivity_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
     exploratory_parser = subparsers.add_parser(
         "run-exploratory-coupling",
-        help="Run opt-in exploratory EEG/SEEG coupling analyses from staged EEG labels and AAL3 region signals.",
+        parents=common_parents,
+        help="Run opt-in exploratory EEG/SEEG coupling analyses from staged EEG labels and staged SEEG parcellation signals.",
     )
     exploratory_parser.add_argument("--analysis", default="all", choices=["all", *_EXPLORATORY_ANALYSIS_CHOICES])
     exploratory_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
@@ -57,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Minimum subject support for exploratory group summaries; defaults to the config threshold.",
     )
-    subparsers.add_parser("render-reports", help="Render figures and Excel tables from staged analysis outputs.")
+    subparsers.add_parser("render-reports", parents=common_parents, help="Render figures and Excel tables from staged analysis outputs.")
     return parser
 
 
@@ -99,7 +131,14 @@ def _write_command_log(
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
-    cfg = AnalysisConfig()
+    cfg_kwargs = {
+        "analysis_state": args.analysis_state,
+        "seeg_parcellation_name": args.seeg_parcellation_name,
+        "seeg_parcellation_column": args.seeg_parcellation_column,
+    }
+    if args.run_id is not None:
+        cfg_kwargs["run_timestamp"] = args.run_id
+    cfg = AnalysisConfig(**cfg_kwargs)
     started_at = datetime.now()
     try:
         if args.command == "build-index":

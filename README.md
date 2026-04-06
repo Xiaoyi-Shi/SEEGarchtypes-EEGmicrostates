@@ -42,6 +42,17 @@ uv run seeg-eegmicrostates run-exploratory-coupling --analysis all
 uv run seeg-eegmicrostates render-reports
 ```
 
+If you want multiple staged commands to share one run folder, pass the same `--run-id` to each command:
+
+```bash
+uv run seeg-eegmicrostates build-index --run-id 20260406_230000
+uv run seeg-eegmicrostates run-eeg-states --run-id 20260406_230000
+uv run seeg-eegmicrostates run-seeg-regions --run-id 20260406_230000
+uv run seeg-eegmicrostates run-activity-effects --run-id 20260406_230000
+uv run seeg-eegmicrostates run-connectivity-effects --method all --run-id 20260406_230000
+uv run seeg-eegmicrostates render-reports --run-id 20260406_230000
+```
+
 What each command does:
 
 - `build-index`: scans recordings, loads workbook metadata, builds `IDE_A` segments, and filters the main cohort.
@@ -50,7 +61,7 @@ What each command does:
 - `run-activity-effects`: computes EEG-state-conditioned `AAL3` activity profiles together with four-state omnibus and pairwise post-hoc summaries from the staged caches.
 - `run-connectivity-effects`: computes primary EEG-state-conditioned `AAL3` region connectivity profiles together with omnibus and pairwise post-hoc summaries from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
 - `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels and `AAL3` region signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, or `all`.
-- `render-reports`: writes QC figures and Excel exports from cached results.
+- `render-reports`: writes figures and Excel exports from cached results.
 
 By default, EEG state staging uses `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow.
 
@@ -88,7 +99,13 @@ Artifacts are written under:
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/tables/`: Excel exports produced by a specific CLI command invocation
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/logs/`: per-command logs with command, timing, config hash, and output paths
 
-Each CLI command gets its own timestamped run directory. A full end-to-end pipeline therefore creates multiple sibling folders under `artifacts/runs/`, while cache reuse is still keyed only by the branch-specific config hash.
+If you do not pass `--run-id`, each CLI command gets its own timestamped run directory. If you reuse the same `--run-id`, multiple staged commands append logs and report outputs under the same `artifacts/runs/<run-id>/` folder while cache reuse remains keyed only by the branch-specific config hash.
+
+Run directories are created lazily:
+
+- commands that only touch reusable cache outputs typically create `logs/` but no `reports/`
+- `reports/figures/` and `reports/tables/` only appear when a command actually writes figure or Excel outputs
+- there is no precreated `reports/qc/` placeholder anymore
 
 In practice:
 

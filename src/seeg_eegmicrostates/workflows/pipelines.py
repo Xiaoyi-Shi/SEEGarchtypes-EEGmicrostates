@@ -35,7 +35,7 @@ from seeg_eegmicrostates.seeg import (
     compute_band_limited_region_signals,
     load_and_crop_bipolar_seeg,
 )
-from seeg_eegmicrostates.segment import build_ide_a_segments
+from seeg_eegmicrostates.segment import build_state_segments
 from seeg_eegmicrostates.stats import (
     run_group_connectivity_statistics,
     run_group_permutation_statistics,
@@ -138,25 +138,33 @@ def _exploratory_min_subjects(min_subjects: int | None, cfg: AnalysisConfig) -> 
     return int(min_subjects if min_subjects is not None else cfg.min_group_subjects)
 
 
+def _segment_stem(cfg: AnalysisConfig) -> str:
+    return f"{cfg.analysis_state_token}_segments"
+
+
+def _cohort_stem(cfg: AnalysisConfig) -> str:
+    return f"cohort_{cfg.analysis_state_token}_main"
+
+
 def build_index_artifacts(cfg: AnalysisConfig) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     patient_info, annotation_info = load_workbook_tables(cfg.workbook_path)
     _ = patient_info
-    recording_index = scan_repository(cfg.data_root)
-    segments = build_ide_a_segments(annotation_info)
+    recording_index = scan_repository(cfg.data_root, analysis_state=cfg.analysis_state)
+    segments = build_state_segments(annotation_info, cfg.analysis_state)
     cohort, inventory = build_main_cohort(recording_index, segments, cfg)
     outputs = {
         "recording_index": write_dataframe(recording_index, cfg.cache_path("index", "recording_index", ext="parquet")),
-        "ide_a_segments": write_dataframe(segments, cfg.cache_path("segments", "ide_a_segments", ext="parquet")),
-        "cohort": write_dataframe(cohort, cfg.cache_path("index", "cohort_ide_a_main", ext="parquet")),
+        "segments": write_dataframe(segments, cfg.cache_path("segments", _segment_stem(cfg), ext="parquet")),
+        "cohort": write_dataframe(cohort, cfg.cache_path("index", _cohort_stem(cfg), ext="parquet")),
         "eeg_inventory": write_dataframe(inventory, cfg.cache_path("eeg", "eeg_channel_inventory", ext="parquet")),
     }
     return outputs
 
 
 def _load_cohort_and_segments(cfg: AnalysisConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
-    cohort_path = cfg.cache_path("index", "cohort_ide_a_main", ext="parquet")
-    segments_path = cfg.cache_path("segments", "ide_a_segments", ext="parquet")
+    cohort_path = cfg.cache_path("index", _cohort_stem(cfg), ext="parquet")
+    segments_path = cfg.cache_path("segments", _segment_stem(cfg), ext="parquet")
     if not cohort_path.exists() or not segments_path.exists():
         build_index_artifacts(cfg)
     cohort = read_dataframe(cohort_path)
@@ -202,7 +210,7 @@ def run_eeg_microstate_branch(
     branch: str = _BAND_BRANCH,
     template_fif: str | Path | None = None,
 ) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     cached = {
         "model": cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch=branch),
         "labels": cfg.cache_path("eeg", "microstate_labels", ext="parquet", branch=branch),
@@ -250,7 +258,7 @@ def run_eeg_states_stage(cfg: AnalysisConfig, *, template_fif: str | Path | None
 
 
 def run_seeg_band_limited_region_branch(cfg: AnalysisConfig) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     cohort = _eligible_rows(cfg)
     cached = {
         "mapping": cfg.cache_path("seeg", _SEEG_REGION_MAP_STEM, ext="parquet", branch="band_1_40"),
@@ -273,6 +281,7 @@ def run_seeg_band_limited_region_branch(cfg: AnalysisConfig) -> dict[str, Path]:
             list(raw_bp.ch_names),
             patient_id=patient_id,
             atlas_column=cfg.seeg_parcellation_column,
+            parcellation_name=cfg.seeg_parcellation_name,
         )
         mapping_frames.append(mapping_df)
         region_df, coverage_df = compute_band_limited_region_signals(raw_bp, mapping_df, cfg, patient_id=patient_id)
@@ -294,7 +303,7 @@ def run_seeg_regions_stage(cfg: AnalysisConfig) -> dict[str, Path]:
 
 
 def run_activity_effects_stage(cfg: AnalysisConfig) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     cached = {
         "aligned": cfg.cache_path("coupling", "aligned_activity", ext="parquet", branch=_ACTIVITY_BRANCH),
         "subject_profiles": cfg.cache_path("coupling", _ACTIVITY_SUBJECT_PROFILE_STEM, ext="parquet", branch=_ACTIVITY_BRANCH),
@@ -376,7 +385,7 @@ def run_exploratory_event_activity_stage(
     event_window_sec: float = 1.0,
     min_subjects: int | None = None,
 ) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     threshold = _exploratory_min_subjects(min_subjects, cfg)
     branch = _exploratory_branch(
         cfg,
@@ -447,7 +456,7 @@ def run_exploratory_event_connectivity_stage(
     event_window_sec: float = 1.0,
     min_subjects: int | None = None,
 ) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     if method == "all":
         outputs: dict[str, Path] = {}
         for item in ("corr", "plv", "wpli"):
@@ -532,7 +541,7 @@ def run_exploratory_windowed_coupling_stage(
     window_sec: float = 10.0,
     min_subjects: int | None = None,
 ) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     threshold = _exploratory_min_subjects(min_subjects, cfg)
     branch = _exploratory_branch(
         cfg,
@@ -602,7 +611,7 @@ def run_exploratory_transition_coupling_stage(
     event_window_sec: float = 1.0,
     min_subjects: int | None = None,
 ) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     threshold = _exploratory_min_subjects(min_subjects, cfg)
     branch = _exploratory_branch(
         cfg,
@@ -708,7 +717,7 @@ def run_exploratory_coupling_stage(
 
 
 def run_band_limited_connectivity_branch(cfg: AnalysisConfig, *, method: str = "corr") -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     if method == "all":
         outputs: dict[str, Path] = {}
         for item in ("corr", "plv", "wpli"):
@@ -800,14 +809,16 @@ def run_connectivity_effects_stage(cfg: AnalysisConfig, *, method: str = "all") 
 
 
 def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
-    cfg.ensure_runtime_directories()
+    cfg.ensure_cache_directories()
     outputs: dict[str, Path] = {}
+    parcel_label = f"{cfg.parcellation_display_name} {cfg.parcellation_unit_label}"
     coverage_path = cfg.cache_path("seeg", _SEEG_REGION_COVERAGE_STEM, ext="parquet", branch=_BAND_BRANCH)
     if coverage_path.exists():
         coverage_df = read_dataframe(coverage_path)
         outputs["coverage"] = plot_coverage_summary(
             coverage_df,
             cfg.report_path("region_coverage", ext="png", branch=_BAND_BRANCH),
+            title=f"{parcel_label} coverage",
         )
     model_path = cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch=_BAND_BRANCH)
     if model_path.exists():
@@ -820,7 +831,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs["activity_omnibus_heatmap"] = plot_group_metric_heatmap(
             read_dataframe(activity_omnibus_path),
             cfg.report_path("activity_omnibus", ext="png", branch=_ACTIVITY_BRANCH),
-            title="Supplemental band-limited AAL3 activity omnibus statistics",
+            title=f"Supplemental band-limited {parcel_label} activity omnibus statistics",
             value_column="statistic",
             unit_column="region",
         )
@@ -829,7 +840,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs["activity_posthoc_heatmap"] = plot_group_metric_heatmap(
             read_dataframe(activity_posthoc_path),
             cfg.report_path("activity_posthoc", ext="png", branch=_ACTIVITY_BRANCH),
-            title="Supplemental band-limited AAL3 activity post-hoc effects",
+            title=f"Supplemental band-limited {parcel_label} activity post-hoc effects",
             value_column="mean_effect",
             unit_column="region",
             row_column="contrast",
@@ -855,14 +866,14 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             outputs[f"band_connectivity_{method}_omnibus"] = plot_connectivity_omnibus_matrix(
                 read_dataframe(connectivity_omnibus_path),
                 cfg.report_path(f"band_connectivity_omnibus_{method}", ext="png", branch=branch),
-                title=f"AAL3 band-limited connectivity omnibus statistics ({method.upper()})",
+                title=f"{parcel_label} band-limited connectivity omnibus statistics ({method.upper()})",
             )
         connectivity_posthoc_path = cfg.cache_path("stats", _CONNECTIVITY_GROUP_POSTHOC_STEM, ext="parquet", branch=branch)
         if connectivity_posthoc_path.exists():
             outputs[f"band_connectivity_{method}_posthoc"] = plot_connectivity_posthoc_matrices(
                 read_dataframe(connectivity_posthoc_path),
                 cfg.report_path(f"band_connectivity_posthoc_{method}", ext="png", branch=branch),
-                title=f"AAL3 band-limited connectivity post-hoc effects ({method.upper()})",
+                title=f"{parcel_label} band-limited connectivity post-hoc effects ({method.upper()})",
             )
         subject_path = cfg.cache_path("coupling", _CONNECTIVITY_SUBJECT_PROFILE_STEM, ext="parquet", branch=branch)
         if subject_path.exists() and connectivity_omnibus_path.exists() and connectivity_posthoc_path.exists():
@@ -882,7 +893,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_event_activity_heatmap"] = plot_group_effects_heatmap(
             read_dataframe(group_path),
             cfg.report_path("exploratory_event_activity", ext="png", branch=branch),
-            title="Exploratory EEG event-locked AAL3 activity effects",
+            title=f"Exploratory EEG event-locked {parcel_label} activity effects",
         )
         subject_path = cfg.cache_path("coupling", "subject_event_locked_activity", ext="parquet", branch=branch)
         if subject_path.exists():
@@ -902,7 +913,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_event_connectivity_heatmap"] = plot_connectivity_effect_matrices(
             group_df,
             cfg.report_path("exploratory_event_connectivity", ext="png", branch=branch),
-            title=f"Exploratory EEG event-locked AAL3 connectivity effects ({method.upper()})",
+            title=f"Exploratory EEG event-locked {parcel_label} connectivity effects ({method.upper()})",
         )
         subject_path = cfg.cache_path("coupling", "subject_event_locked_connectivity", ext="parquet", branch=branch)
         if subject_path.exists():
@@ -920,7 +931,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_windowed_coupling_heatmap"] = plot_group_effects_heatmap(
             read_dataframe(group_path),
             cfg.report_path("exploratory_windowed_coupling", ext="png", branch=branch),
-            title="Exploratory windowed EEG occupancy and AAL3 coupling effects",
+            title=f"Exploratory windowed EEG occupancy and {parcel_label} coupling effects",
         )
         subject_path = cfg.cache_path("coupling", "subject_windowed_coupling", ext="parquet", branch=branch)
         if subject_path.exists():
@@ -938,7 +949,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_transition_coupling_heatmap"] = plot_transition_effect_heatmap(
             read_dataframe(group_path),
             cfg.report_path("exploratory_transition_coupling", ext="png", branch=branch),
-            title="Exploratory EEG transition-locked AAL3 coupling effects",
+            title=f"Exploratory EEG transition-locked {parcel_label} coupling effects",
         )
         subject_path = cfg.cache_path("coupling", "subject_transition_coupling", ext="parquet", branch=branch)
         if subject_path.exists():

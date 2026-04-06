@@ -44,7 +44,7 @@ def build_main_cohort(
         }
         if not row.get("usable_segment", False):
             include = False
-            reason = "invalid_ide_a_segment"
+            reason = f"invalid_{cfg.analysis_state_token}_segment"
         elif not include:
             include = False
             reason = "missing_required_assets"

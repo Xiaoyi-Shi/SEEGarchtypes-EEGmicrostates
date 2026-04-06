@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from seeg_eegmicrostates._utils import write_dataframe
-from seeg_eegmicrostates.config import AnalysisConfig
+from seeg_eegmicrostates.config import AnalysisConfig, YEO7_PARCELLATION_COLUMN, YEO17_PARCELLATION_COLUMN
 from seeg_eegmicrostates.workflows.pipelines import (
     _exploratory_branch,
     render_reports,
@@ -49,6 +49,17 @@ def test_run_specific_report_and_log_paths_live_under_timestamped_run_directory(
         / "logs"
         / f"render_reports_{cfg.runtime_hash}.log"
     )
+    assert not (cfg.reports_root / "qc").exists()
+
+
+def test_cache_directory_setup_does_not_precreate_run_report_tree(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
+    directories = cfg.ensure_cache_directories()
+    assert directories["cache_root"].exists()
+    assert directories["runs_root"].exists()
+    assert not cfg.run_root.exists()
+    assert not cfg.reports_root.exists()
+    assert not cfg.logs_root.exists()
 
 
 def test_default_sampling_rates_use_shared_250_hz_grid() -> None:
@@ -70,6 +81,26 @@ def test_seeg_parcellation_changes_runtime_hash_and_cache_identity(tmp_path: Pat
     custom_path = custom_cfg.cache_path("seeg", "region_band_limited", ext="parquet", branch="band_1_40", patient_id="sub-01")
     assert aal3_cfg.runtime_hash != custom_cfg.runtime_hash
     assert aal3_path != custom_path
+
+
+def test_yeo17_parcellation_uses_default_schaefer_column(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", seeg_parcellation_name="yeo17")
+    assert cfg.seeg_parcellation_column == YEO17_PARCELLATION_COLUMN
+
+
+def test_yeo7_parcellation_uses_default_schaefer_column(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", seeg_parcellation_name="yeo7")
+    assert cfg.seeg_parcellation_column == YEO7_PARCELLATION_COLUMN
+
+
+def test_analysis_state_changes_runtime_hash_and_cache_identity(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    ide_a_cfg = AnalysisConfig(artifact_root=artifact_root, analysis_state="IDE_A")
+    ide_s_cfg = AnalysisConfig(artifact_root=artifact_root, analysis_state="IDE_S")
+    ide_a_path = ide_a_cfg.cache_path("index", "cohort_ide_a_main", ext="parquet")
+    ide_s_path = ide_s_cfg.cache_path("index", "cohort_ide_s_main", ext="parquet")
+    assert ide_a_cfg.runtime_hash != ide_s_cfg.runtime_hash
+    assert ide_a_path != ide_s_path
 
 
 def test_run_timestamp_does_not_change_cache_identity(tmp_path: Path) -> None:
@@ -121,6 +152,8 @@ def test_run_activity_effects_stage_reuses_cached_outputs(tmp_path: Path) -> Non
     assert outputs["subject_profiles_excel"].exists()
     assert outputs["group_omnibus_excel"].exists()
     assert outputs["group_posthoc_excel"].exists()
+    assert not (cfg.reports_root / "figures").exists()
+    assert not (cfg.reports_root / "qc").exists()
 
 
 def test_render_reports_exports_main_omnibus_and_posthoc_outputs(tmp_path: Path) -> None:

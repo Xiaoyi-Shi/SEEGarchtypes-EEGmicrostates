@@ -7,8 +7,9 @@ import numpy as np
 import pandas as pd
 
 from seeg_eegmicrostates.config import AnalysisConfig
+from seeg_eegmicrostates.io.index import scan_repository
 from seeg_eegmicrostates.qc.cohort import build_main_cohort
-from seeg_eegmicrostates.segment.ide_a import build_ide_a_segments
+from seeg_eegmicrostates.segment.ide_a import build_ide_a_segments, build_state_segments
 
 
 def _write_eeg(path: Path, ch_names: list[str]) -> Path:
@@ -30,6 +31,42 @@ def test_build_ide_a_segments_materializes_valid_windows() -> None:
     assert len(segments) == 2
     assert bool(segments.loc[0, "usable_segment"]) is True
     assert bool(segments.loc[1, "usable_segment"]) is False
+
+
+def test_build_state_segments_supports_ide_s_windows() -> None:
+    annotation_info = pd.DataFrame(
+        [
+            {"ID": "sub-01", "status1": "IDE", "status2": "S", "rest_start": 10.0, "rest_end": 130.0, "rest_during": 120.0},
+            {"ID": "sub-02", "status1": "IDE", "status2": "A", "rest_start": 20.0, "rest_end": 200.0, "rest_during": 180.0},
+        ]
+    )
+    segments = build_state_segments(annotation_info, "IDE_S")
+    assert len(segments) == 1
+    assert segments.loc[0, "state"] == "IDE_S"
+    assert bool(segments.loc[0, "usable_segment"]) is True
+
+
+def test_scan_repository_selects_requested_analysis_state_files(tmp_path: Path) -> None:
+    patient_dir = tmp_path / "sub-01"
+    ref_dir = patient_dir / "ref"
+    bipolar_dir = patient_dir / "bipolar"
+    atlas_dir = patient_dir / "MNI"
+    atlas_dir.mkdir(parents=True)
+    ref_dir.mkdir(parents=True)
+    bipolar_dir.mkdir(parents=True)
+    (ref_dir / "IDE_A_eeg.fif").write_text("", encoding="utf-8")
+    (ref_dir / "IDE_A_seeg.fif").write_text("", encoding="utf-8")
+    (bipolar_dir / "IDE_A_seeg.fif").write_text("", encoding="utf-8")
+    (ref_dir / "IDE_S_eeg.fif").write_text("", encoding="utf-8")
+    (ref_dir / "IDE_S_seeg.fif").write_text("", encoding="utf-8")
+    (bipolar_dir / "IDE_S_seeg.fif").write_text("", encoding="utf-8")
+    (atlas_dir / "Atlas.tsv").write_text("x", encoding="utf-8")
+
+    indexed = scan_repository(tmp_path, analysis_state="IDE_S")
+
+    assert indexed.loc[0, "state"] == "IDE_S"
+    assert str(indexed.loc[0, "eeg_ref_path"]).endswith("IDE_S_eeg.fif")
+    assert str(indexed.loc[0, "seeg_bipolar_path"]).endswith("IDE_S_seeg.fif")
 
 
 def test_build_main_cohort_filters_missing_channels(tmp_path: Path) -> None:
@@ -75,3 +112,4 @@ def test_build_main_cohort_filters_missing_channels(tmp_path: Path) -> None:
     assert cohort.loc[cohort["patient_id"] == "bad", "include_main"].item() is False
     assert "O2" in cohort.loc[cohort["patient_id"] == "bad", "missing_channels"].item()
     assert len(inventory) == 2
+    assert cohort.loc[cohort["patient_id"] == "bad", "reason_excluded"].item() == "missing_standard11_channels"

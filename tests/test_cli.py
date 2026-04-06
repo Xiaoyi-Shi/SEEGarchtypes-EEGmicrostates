@@ -47,6 +47,34 @@ def test_cli_describes_aal3_region_outputs() -> None:
     assert "state-alignment" not in top_level_help
 
 
+def test_cli_accepts_analysis_state_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["build-index", "--analysis-state", "IDE_S"])
+    assert args.command == "build-index"
+    assert args.analysis_state == "IDE_S"
+
+
+def test_cli_accepts_shared_run_id_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["build-index", "--run-id", "20260406_230000"])
+    assert args.command == "build-index"
+    assert args.run_id == "20260406_230000"
+
+
+def test_cli_accepts_yeo17_parcellation_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["run-seeg-regions", "--seeg-parcellation-name", "yeo17"])
+    assert args.command == "run-seeg-regions"
+    assert args.seeg_parcellation_name == "yeo17"
+
+
+def test_cli_accepts_yeo7_parcellation_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["run-seeg-regions", "--seeg-parcellation-name", "yeo7"])
+    assert args.command == "run-seeg-regions"
+    assert args.seeg_parcellation_name == "yeo7"
+
+
 def test_run_eeg_states_accepts_template_override() -> None:
     parser = build_parser()
     args = parser.parse_args(["run-eeg-states", "--template-fif", "template.fif"])
@@ -88,7 +116,7 @@ def test_cli_main_writes_command_log_into_timestamped_run_folder(
     fake_output = tmp_path / "artifact.txt"
     fake_output.write_text("ok", encoding="utf-8")
 
-    monkeypatch.setattr(cli, "AnalysisConfig", lambda: cfg)
+    monkeypatch.setattr(cli, "AnalysisConfig", lambda **_kwargs: cfg)
     monkeypatch.setattr(cli, "build_index_artifacts", lambda _: {"recording_index": fake_output})
 
     cli.main(["build-index"])
@@ -102,3 +130,4 @@ def test_cli_main_writes_command_log_into_timestamped_run_folder(
     assert "command: build-index" in log_text
     assert "status: completed" in log_text
     assert str(fake_output) in log_text
+    assert not cfg.reports_root.exists()

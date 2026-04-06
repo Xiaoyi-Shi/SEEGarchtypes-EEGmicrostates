@@ -14,12 +14,14 @@ def _coerce_positive(value: object) -> float | None:
     return number
 
 
-def build_ide_a_segments(annotation_info: pd.DataFrame) -> pd.DataFrame:
-    ide_a = annotation_info[
-        (annotation_info["status1"].astype(str) == "IDE") & (annotation_info["status2"].astype(str) == "A")
+def build_state_segments(annotation_info: pd.DataFrame, analysis_state: str = "IDE_A") -> pd.DataFrame:
+    state_name = str(analysis_state).strip().upper()
+    prefix, suffix = state_name.split("_", 1)
+    matched = annotation_info[
+        (annotation_info["status1"].astype(str) == prefix) & (annotation_info["status2"].astype(str) == suffix)
     ].copy()
     rows: list[dict[str, object]] = []
-    for row in ide_a.to_dict(orient="records"):
+    for row in matched.to_dict(orient="records"):
         start_sec = _coerce_positive(row.get("rest_start"))
         end_sec = _coerce_positive(row.get("rest_end"))
         duration_sec = _coerce_positive(row.get("rest_during"))
@@ -31,7 +33,7 @@ def build_ide_a_segments(annotation_info: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "patient_id": str(row["ID"]),
-                "state": "IDE_A",
+                "state": state_name,
                 "start_sec": start_sec if usable else pd.NA,
                 "end_sec": end_sec if usable else pd.NA,
                 "duration_sec": duration_sec if usable else pd.NA,
@@ -39,3 +41,7 @@ def build_ide_a_segments(annotation_info: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def build_ide_a_segments(annotation_info: pd.DataFrame) -> pd.DataFrame:
+    return build_state_segments(annotation_info, "IDE_A")
