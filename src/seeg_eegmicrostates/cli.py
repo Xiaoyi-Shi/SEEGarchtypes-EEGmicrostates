@@ -7,10 +7,17 @@ import traceback
 from seeg_eegmicrostates.config import (
     AnalysisConfig,
     DEFAULT_ANALYSIS_STATE,
+    DEFAULT_DIRECT_LAG_STEP_MS,
+    DEFAULT_DIRECT_MAX_LAG_MS,
+    DEFAULT_DIRECT_STATE_BACKEND,
+    DEFAULT_DIRECT_STATE_COMPONENTS,
+    DEFAULT_DIRECT_STATE_SURROGATES,
+    DEFAULT_DIRECT_TRANSITION_WINDOW_SEC,
     SEEG_PARCELLATION_COLUMN,
     SEEG_PARCELLATION_NAME,
     SUPPORTED_ANALYSIS_STATES,
 )
+from seeg_eegmicrostates.coupling import SUPPORTED_DIRECT_STATE_BACKENDS
 from seeg_eegmicrostates.workflows import (
     build_index_artifacts,
     render_reports,
@@ -27,6 +34,9 @@ _EXPLORATORY_ANALYSIS_CHOICES = (
     "event-connectivity",
     "windowed-coupling",
     "transition-coupling",
+    "direct-state-coupling",
+    "lagged-state-coupling",
+    "transition-state-coupling",
 )
 
 
@@ -64,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     eeg_parser = subparsers.add_parser("run-eeg-states", parents=common_parents, help="Generate reusable 1-40 Hz EEG microstate states.")
     eeg_parser.add_argument(
         "--template-fif",
-        help="Override the default EEG microstate template file (defaults to artifacts/cache/eeg/ModK.fif).",
+        help="Use an external EEG microstate template file. Without this override, the stage uses the configured default template at artifacts/cache/eeg/ModK.fif.",
     )
     subparsers.add_parser("run-seeg-regions", parents=common_parents, help="Generate reusable 1-40 Hz SEEG parcellation signals.")
     subparsers.add_parser("run-activity-effects", parents=common_parents, help="Compute supplemental EEG-state-conditioned SEEG activity effects.")
@@ -77,12 +87,54 @@ def build_parser() -> argparse.ArgumentParser:
     exploratory_parser = subparsers.add_parser(
         "run-exploratory-coupling",
         parents=common_parents,
-        help="Run opt-in exploratory EEG/SEEG coupling analyses from staged EEG labels and staged SEEG parcellation signals.",
+        help="Run opt-in exploratory EEG/SEEG region-signal and direct state-coupling analyses from staged EEG labels and staged SEEG parcellation signals.",
     )
     exploratory_parser.add_argument("--analysis", default="all", choices=["all", *_EXPLORATORY_ANALYSIS_CHOICES])
     exploratory_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
     exploratory_parser.add_argument("--event-window-sec", type=float, default=1.0)
     exploratory_parser.add_argument("--window-sec", type=float, default=10.0)
+    exploratory_parser.add_argument(
+        "--transition-window-sec",
+        type=float,
+        default=DEFAULT_DIRECT_TRANSITION_WINDOW_SEC,
+        help="Window size in seconds used by direct transition-state coupling analyses.",
+    )
+    exploratory_parser.add_argument(
+        "--direct-backend",
+        default=DEFAULT_DIRECT_STATE_BACKEND,
+        choices=list(SUPPORTED_DIRECT_STATE_BACKENDS),
+        help="Reduced-space backend used for direct EEG-SEEG state-coupling analyses.",
+    )
+    exploratory_parser.add_argument(
+        "--direct-state-count",
+        type=int,
+        default=None,
+        help="Optional SEEG state count for direct EEG-SEEG state coupling. Defaults to the EEG microstate count.",
+    )
+    exploratory_parser.add_argument(
+        "--direct-components",
+        type=int,
+        default=DEFAULT_DIRECT_STATE_COMPONENTS,
+        help="Number of reduced SEEG components used by direct EEG-SEEG state coupling.",
+    )
+    exploratory_parser.add_argument(
+        "--max-lag-ms",
+        type=int,
+        default=DEFAULT_DIRECT_MAX_LAG_MS,
+        help="Maximum absolute lag in milliseconds used by lagged direct EEG-SEEG state coupling.",
+    )
+    exploratory_parser.add_argument(
+        "--lag-step-ms",
+        type=int,
+        default=DEFAULT_DIRECT_LAG_STEP_MS,
+        help="Lag step size in milliseconds used by lagged direct EEG-SEEG state coupling.",
+    )
+    exploratory_parser.add_argument(
+        "--direct-surrogates",
+        type=int,
+        default=DEFAULT_DIRECT_STATE_SURROGATES,
+        help="Number of circular-shift surrogates used by direct EEG-SEEG state coupling statistics.",
+    )
     exploratory_parser.add_argument(
         "--min-subjects",
         type=int,
@@ -111,6 +163,9 @@ def _write_command_log(
         f"argv: {' '.join(argv)}",
         f"status: {status}",
         f"run_timestamp: {cfg.run_timestamp}",
+        f"analysis_state: {cfg.analysis_state}",
+        f"seeg_parcellation_name: {cfg.seeg_parcellation_name}",
+        f"seeg_parcellation_column: {cfg.seeg_parcellation_column}",
         f"run_root: {cfg.run_root}",
         f"cache_root: {cfg.cache_root}",
         f"runtime_hash: {cfg.runtime_hash}",
@@ -158,6 +213,13 @@ def main(argv: list[str] | None = None) -> None:
                 method=args.method,
                 event_window_sec=args.event_window_sec,
                 window_sec=args.window_sec,
+                transition_window_sec=args.transition_window_sec,
+                direct_backend=args.direct_backend,
+                direct_state_count=args.direct_state_count,
+                direct_components=args.direct_components,
+                max_lag_ms=args.max_lag_ms,
+                lag_step_ms=args.lag_step_ms,
+                direct_surrogates=args.direct_surrogates,
                 min_subjects=args.min_subjects,
             )
         elif args.command == "render-reports":

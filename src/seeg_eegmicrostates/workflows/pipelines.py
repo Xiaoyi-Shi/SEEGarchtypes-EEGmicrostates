@@ -7,19 +7,25 @@ import pandas as pd
 from seeg_eegmicrostates._utils import config_hash, read_dataframe, write_dataframe, write_excel_dataframe
 from seeg_eegmicrostates.config import AnalysisConfig
 from seeg_eegmicrostates.coupling import (
+    align_eeg_and_seeg_state_labels,
     align_label_table_to_region_timeseries,
     align_region_timeseries_to_labels,
     build_microstate_event_table,
     build_state_transition_table,
     connectivity_analysis_branch,
+    compute_subject_direct_state_coupling,
     compute_subject_event_locked_connectivity_effects,
     compute_subject_event_locked_region_effects,
     compute_subject_microstate_connectivity_profiles,
     compute_subject_microstate_region_profiles,
+    compute_subject_transition_state_coupling,
     compute_subject_windowed_region_coupling,
     compute_windowed_region_metrics,
     compute_windowed_state_metrics,
+    derive_direct_seeg_state_artifacts,
     normalize_connectivity_method,
+    normalize_direct_state_backend,
+    sample_period_from_times,
 )
 from seeg_eegmicrostates.eeg import (
     label_microstates,
@@ -48,9 +54,11 @@ from seeg_eegmicrostates.viz import (
     plot_connectivity_omnibus_matrix,
     plot_connectivity_posthoc_matrices,
     plot_coverage_summary,
+    plot_direct_coupling_lag_curve,
     plot_group_effects_heatmap,
     plot_group_metric_heatmap,
     plot_microstate_templates,
+    plot_state_transition_matrix,
     plot_transition_effect_heatmap,
 )
 
@@ -67,11 +75,22 @@ _SEEG_REGION_MAP_STEM = "bipolar_region_map"
 _SEEG_REGION_COVERAGE_STEM = "region_coverage"
 _SEEG_REGION_BAND_STEM = "region_band_limited"
 _EXPLORATORY_SHARED_BRANCH = "exploratory_shared"
+_DIRECT_STATE_FEATURES_STEM = "direct_state_features"
+_DIRECT_STATE_LABELS_STEM = "direct_state_labels"
+_DIRECT_STATE_SUBJECT_STEM = "subject_direct_state_coupling"
+_DIRECT_STATE_GROUP_STEM = "group_direct_state_coupling"
+_LAGGED_STATE_SUBJECT_STEM = "subject_lagged_state_coupling"
+_LAGGED_STATE_GROUP_STEM = "group_lagged_state_coupling"
+_TRANSITION_STATE_SUBJECT_STEM = "subject_transition_state_coupling"
+_TRANSITION_STATE_GROUP_STEM = "group_transition_state_coupling"
 _EXPLORATORY_ANALYSES = (
     "event-activity",
     "event-connectivity",
     "windowed-coupling",
     "transition-coupling",
+    "direct-state-coupling",
+    "lagged-state-coupling",
+    "transition-state-coupling",
 )
 
 
@@ -92,6 +111,24 @@ def _shared_event_paths(cfg: AnalysisConfig) -> dict[str, Path]:
         "events": cfg.cache_path("coupling", "exploratory_event_table", ext="parquet", branch=_EXPLORATORY_SHARED_BRANCH),
         "transitions": cfg.cache_path("coupling", "exploratory_transition_table", ext="parquet", branch=_EXPLORATORY_SHARED_BRANCH),
     }
+
+
+def _direct_state_artifact_branch(
+    cfg: AnalysisConfig,
+    *,
+    backend: str,
+    state_count: int,
+    components: int,
+) -> str:
+    return _exploratory_branch(
+        cfg,
+        "direct-state-shared",
+        params={
+            "backend": normalize_direct_state_backend(backend),
+            "state_count": int(state_count),
+            "components": int(components),
+        },
+    )
 
 
 def _ensure_exploratory_event_tables(cfg: AnalysisConfig) -> dict[str, Path]:
@@ -136,6 +173,41 @@ def _discover_branch_paths(cfg: AnalysisConfig, category: str, stem: str, *, ext
 
 def _exploratory_min_subjects(min_subjects: int | None, cfg: AnalysisConfig) -> int:
     return int(min_subjects if min_subjects is not None else cfg.min_group_subjects)
+
+
+def _resolve_direct_state_count(state_count: int | None, cfg: AnalysisConfig) -> int:
+    return max(1, int(state_count if state_count is not None else cfg.microstate_k))
+
+
+def _resolve_direct_components(components: int | None, cfg: AnalysisConfig) -> int:
+    return max(1, int(components if components is not None else cfg.direct_state_components))
+
+
+def _resolve_direct_surrogates(surrogates: int | None, cfg: AnalysisConfig) -> int:
+    return max(1, int(surrogates if surrogates is not None else cfg.direct_state_surrogates))
+
+
+def _resolve_transition_window_sec(window_sec: float | None, cfg: AnalysisConfig) -> float:
+    return float(window_sec if window_sec is not None else cfg.direct_transition_window_sec)
+
+
+def _resolve_direct_lag_grid(
+    cfg: AnalysisConfig,
+    *,
+    sample_period_sec: float,
+    max_lag_ms: int | None,
+    lag_step_ms: int | None,
+) -> list[int]:
+    if sample_period_sec <= 0.0:
+        return [0]
+    max_lag = max(0, int(max_lag_ms if max_lag_ms is not None else cfg.direct_max_lag_ms))
+    lag_step = max(1, int(lag_step_ms if lag_step_ms is not None else cfg.direct_lag_step_ms))
+    max_lag_samples = int(round(max_lag / 1000.0 / sample_period_sec))
+    step_samples = max(1, int(round(lag_step / 1000.0 / sample_period_sec)))
+    values = list(range(-max_lag_samples, max_lag_samples + 1, step_samples))
+    if 0 not in values:
+        values.append(0)
+    return sorted(set(values))
 
 
 def _segment_stem(cfg: AnalysisConfig) -> str:
@@ -191,6 +263,52 @@ def _write_table_reports(cfg: AnalysisConfig, tables: dict[str, pd.DataFrame], *
 def _write_table_reports_from_paths(cfg: AnalysisConfig, paths: dict[str, Path], *, branch: str) -> dict[str, Path]:
     tables = {stem: read_dataframe(path) for stem, path in paths.items() if path.exists()}
     return _write_table_reports(cfg, tables, branch=branch)
+
+
+def _ensure_direct_state_artifacts(
+    cfg: AnalysisConfig,
+    *,
+    backend: str,
+    state_count: int,
+    components: int,
+) -> tuple[str, dict[str, Path]]:
+    normalized_backend = normalize_direct_state_backend(backend)
+    state_branch = _direct_state_artifact_branch(
+        cfg,
+        backend=normalized_backend,
+        state_count=state_count,
+        components=components,
+    )
+    cached = {
+        "features": cfg.cache_path("coupling", _DIRECT_STATE_FEATURES_STEM, ext="parquet", branch=state_branch),
+        "labels": cfg.cache_path("coupling", _DIRECT_STATE_LABELS_STEM, ext="parquet", branch=state_branch),
+    }
+    if _all_exist(cached):
+        return state_branch, cached
+    _ = run_seeg_regions_stage(cfg)
+    cohort = _eligible_rows(cfg)
+    feature_frames: list[pd.DataFrame] = []
+    label_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        region_df = read_dataframe(
+            cfg.cache_path("seeg", _SEEG_REGION_BAND_STEM, ext="parquet", branch=_BAND_BRANCH, patient_id=patient_id)
+        )
+        feature_df, label_df = derive_direct_seeg_state_artifacts(
+            region_df,
+            patient_id=patient_id,
+            backend=normalized_backend,
+            n_states=state_count,
+            n_components=components,
+            seed=cfg.random_seed + offset,
+        )
+        feature_frames.append(feature_df)
+        label_frames.append(label_df)
+    features = pd.concat(feature_frames, ignore_index=True) if feature_frames else pd.DataFrame()
+    labels = pd.concat(label_frames, ignore_index=True) if label_frames else pd.DataFrame()
+    return state_branch, {
+        "features": write_dataframe(features, cached["features"]),
+        "labels": write_dataframe(labels, cached["labels"]),
+    }
 
 
 def _long_activity_frame(aligned_wide_df: pd.DataFrame, *, patient_id: str) -> pd.DataFrame:
@@ -675,6 +793,327 @@ def run_exploratory_transition_coupling_stage(
     }
 
 
+def run_exploratory_direct_state_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    direct_backend: str = "pca-kmeans",
+    direct_state_count: int | None = None,
+    direct_components: int | None = None,
+    direct_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_backend = normalize_direct_state_backend(direct_backend)
+    state_count = _resolve_direct_state_count(direct_state_count, cfg)
+    components = _resolve_direct_components(direct_components, cfg)
+    surrogates = _resolve_direct_surrogates(direct_surrogates, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _state_branch, state_paths = _ensure_direct_state_artifacts(
+        cfg,
+        backend=normalized_backend,
+        state_count=state_count,
+        components=components,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "direct-state-coupling",
+        params={
+            "backend": normalized_backend,
+            "state_count": state_count,
+            "components": components,
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _DIRECT_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _DIRECT_STATE_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _DIRECT_STATE_SUBJECT_STEM: cached["subject_effects"],
+                _DIRECT_STATE_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "state_features": state_paths["features"],
+            "state_labels": state_paths["labels"],
+            **cached,
+            "subject_effects_excel": tables[_DIRECT_STATE_SUBJECT_STEM],
+            "group_effects_excel": tables[_DIRECT_STATE_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    seeg_state_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_eeg_and_seeg_state_labels(
+            eeg_labels[eeg_labels["patient_id"] == patient_id],
+            seeg_state_labels[seeg_state_labels["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_direct_state_coupling(
+                aligned,
+                patient_id=patient_id,
+                backend=normalized_backend,
+                n_states=state_count,
+                lag_samples=[0],
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["backend", "n_states", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _DIRECT_STATE_SUBJECT_STEM: subject_effects,
+            _DIRECT_STATE_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "state_features": state_paths["features"],
+        "state_labels": state_paths["labels"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_DIRECT_STATE_SUBJECT_STEM],
+        "group_effects_excel": tables[_DIRECT_STATE_GROUP_STEM],
+    }
+
+
+def run_exploratory_lagged_state_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    direct_backend: str = "pca-kmeans",
+    direct_state_count: int | None = None,
+    direct_components: int | None = None,
+    max_lag_ms: int | None = None,
+    lag_step_ms: int | None = None,
+    direct_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_backend = normalize_direct_state_backend(direct_backend)
+    state_count = _resolve_direct_state_count(direct_state_count, cfg)
+    components = _resolve_direct_components(direct_components, cfg)
+    surrogates = _resolve_direct_surrogates(direct_surrogates, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _state_branch, state_paths = _ensure_direct_state_artifacts(
+        cfg,
+        backend=normalized_backend,
+        state_count=state_count,
+        components=components,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "lagged-state-coupling",
+        params={
+            "backend": normalized_backend,
+            "state_count": state_count,
+            "components": components,
+            "max_lag_ms": int(max_lag_ms if max_lag_ms is not None else cfg.direct_max_lag_ms),
+            "lag_step_ms": int(lag_step_ms if lag_step_ms is not None else cfg.direct_lag_step_ms),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _LAGGED_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _LAGGED_STATE_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _LAGGED_STATE_SUBJECT_STEM: cached["subject_effects"],
+                _LAGGED_STATE_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "state_features": state_paths["features"],
+            "state_labels": state_paths["labels"],
+            **cached,
+            "subject_effects_excel": tables[_LAGGED_STATE_SUBJECT_STEM],
+            "group_effects_excel": tables[_LAGGED_STATE_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    seeg_state_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_eeg_and_seeg_state_labels(
+            eeg_labels[eeg_labels["patient_id"] == patient_id],
+            seeg_state_labels[seeg_state_labels["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        lag_grid = _resolve_direct_lag_grid(
+            cfg,
+            sample_period_sec=sample_period,
+            max_lag_ms=max_lag_ms,
+            lag_step_ms=lag_step_ms,
+        )
+        subject_frames.append(
+            compute_subject_direct_state_coupling(
+                aligned,
+                patient_id=patient_id,
+                backend=normalized_backend,
+                n_states=state_count,
+                lag_samples=lag_grid,
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["backend", "n_states", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _LAGGED_STATE_SUBJECT_STEM: subject_effects,
+            _LAGGED_STATE_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "state_features": state_paths["features"],
+        "state_labels": state_paths["labels"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_LAGGED_STATE_SUBJECT_STEM],
+        "group_effects_excel": tables[_LAGGED_STATE_GROUP_STEM],
+    }
+
+
+def run_exploratory_transition_state_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    direct_backend: str = "pca-kmeans",
+    direct_state_count: int | None = None,
+    direct_components: int | None = None,
+    transition_window_sec: float | None = None,
+    direct_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_backend = normalize_direct_state_backend(direct_backend)
+    state_count = _resolve_direct_state_count(direct_state_count, cfg)
+    components = _resolve_direct_components(direct_components, cfg)
+    surrogates = _resolve_direct_surrogates(direct_surrogates, cfg)
+    window_sec = _resolve_transition_window_sec(transition_window_sec, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    event_paths = _ensure_exploratory_event_tables(cfg)
+    _state_branch, state_paths = _ensure_direct_state_artifacts(
+        cfg,
+        backend=normalized_backend,
+        state_count=state_count,
+        components=components,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "transition-state-coupling",
+        params={
+            "backend": normalized_backend,
+            "state_count": state_count,
+            "components": components,
+            "transition_window_sec": float(window_sec),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _TRANSITION_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _TRANSITION_STATE_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _TRANSITION_STATE_SUBJECT_STEM: cached["subject_effects"],
+                _TRANSITION_STATE_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "transitions": event_paths["transitions"],
+            "state_features": state_paths["features"],
+            "state_labels": state_paths["labels"],
+            **cached,
+            "subject_effects_excel": tables[_TRANSITION_STATE_SUBJECT_STEM],
+            "group_effects_excel": tables[_TRANSITION_STATE_GROUP_STEM],
+        }
+    eeg_transitions = read_dataframe(event_paths["transitions"])
+    seeg_state_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        subject_frames.append(
+            compute_subject_transition_state_coupling(
+                eeg_transitions[eeg_transitions["patient_id"] == patient_id],
+                seeg_state_labels[seeg_state_labels["patient_id"] == patient_id],
+                patient_id=patient_id,
+                backend=normalized_backend,
+                n_states=state_count,
+                window_sec=window_sec,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["backend", "n_states", "from_state", "to_state"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _TRANSITION_STATE_SUBJECT_STEM: subject_effects,
+            _TRANSITION_STATE_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "transitions": event_paths["transitions"],
+        "state_features": state_paths["features"],
+        "state_labels": state_paths["labels"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_TRANSITION_STATE_SUBJECT_STEM],
+        "group_effects_excel": tables[_TRANSITION_STATE_GROUP_STEM],
+    }
+
+
 def run_exploratory_coupling_stage(
     cfg: AnalysisConfig,
     *,
@@ -682,6 +1121,13 @@ def run_exploratory_coupling_stage(
     method: str = "all",
     event_window_sec: float = 1.0,
     window_sec: float = 10.0,
+    transition_window_sec: float | None = None,
+    direct_backend: str = "pca-kmeans",
+    direct_state_count: int | None = None,
+    direct_components: int | None = None,
+    max_lag_ms: int | None = None,
+    lag_step_ms: int | None = None,
+    direct_surrogates: int | None = None,
     min_subjects: int | None = None,
 ) -> dict[str, Path]:
     selected = str(analysis).strip().lower()
@@ -691,6 +1137,13 @@ def run_exploratory_coupling_stage(
             kwargs = {
                 "event_window_sec": event_window_sec,
                 "window_sec": window_sec,
+                "transition_window_sec": transition_window_sec,
+                "direct_backend": direct_backend,
+                "direct_state_count": direct_state_count,
+                "direct_components": direct_components,
+                "max_lag_ms": max_lag_ms,
+                "lag_step_ms": lag_step_ms,
+                "direct_surrogates": direct_surrogates,
                 "min_subjects": min_subjects,
                 "method": method,
             }
@@ -712,6 +1165,36 @@ def run_exploratory_coupling_stage(
         return run_exploratory_windowed_coupling_stage(cfg, window_sec=window_sec, min_subjects=min_subjects)
     if selected == "transition-coupling":
         return run_exploratory_transition_coupling_stage(cfg, event_window_sec=event_window_sec, min_subjects=min_subjects)
+    if selected == "direct-state-coupling":
+        return run_exploratory_direct_state_coupling_stage(
+            cfg,
+            direct_backend=direct_backend,
+            direct_state_count=direct_state_count,
+            direct_components=direct_components,
+            direct_surrogates=direct_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "lagged-state-coupling":
+        return run_exploratory_lagged_state_coupling_stage(
+            cfg,
+            direct_backend=direct_backend,
+            direct_state_count=direct_state_count,
+            direct_components=direct_components,
+            max_lag_ms=max_lag_ms,
+            lag_step_ms=lag_step_ms,
+            direct_surrogates=direct_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "transition-state-coupling":
+        return run_exploratory_transition_state_coupling_stage(
+            cfg,
+            direct_backend=direct_backend,
+            direct_state_count=direct_state_count,
+            direct_components=direct_components,
+            transition_window_sec=transition_window_sec,
+            direct_surrogates=direct_surrogates,
+            min_subjects=min_subjects,
+        )
     supported = ", ".join(["all", *_EXPLORATORY_ANALYSES])
     raise ValueError(f"Unsupported exploratory analysis '{analysis}'. Expected one of: {supported}.")
 
@@ -811,6 +1294,7 @@ def run_connectivity_effects_stage(cfg: AnalysisConfig, *, method: str = "all") 
 def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
     cfg.ensure_cache_directories()
     outputs: dict[str, Path] = {}
+    state_label = cfg.analysis_state.replace("_", " ")
     parcel_label = f"{cfg.parcellation_display_name} {cfg.parcellation_unit_label}"
     coverage_path = cfg.cache_path("seeg", _SEEG_REGION_COVERAGE_STEM, ext="parquet", branch=_BAND_BRANCH)
     if coverage_path.exists():
@@ -818,7 +1302,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs["coverage"] = plot_coverage_summary(
             coverage_df,
             cfg.report_path("region_coverage", ext="png", branch=_BAND_BRANCH),
-            title=f"{parcel_label} coverage",
+            title=f"{state_label} {parcel_label} coverage",
         )
     model_path = cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch=_BAND_BRANCH)
     if model_path.exists():
@@ -831,7 +1315,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs["activity_omnibus_heatmap"] = plot_group_metric_heatmap(
             read_dataframe(activity_omnibus_path),
             cfg.report_path("activity_omnibus", ext="png", branch=_ACTIVITY_BRANCH),
-            title=f"Supplemental band-limited {parcel_label} activity omnibus statistics",
+            title=f"{state_label} band-limited {parcel_label} activity omnibus statistics",
             value_column="statistic",
             unit_column="region",
         )
@@ -840,7 +1324,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs["activity_posthoc_heatmap"] = plot_group_metric_heatmap(
             read_dataframe(activity_posthoc_path),
             cfg.report_path("activity_posthoc", ext="png", branch=_ACTIVITY_BRANCH),
-            title=f"Supplemental band-limited {parcel_label} activity post-hoc effects",
+            title=f"{state_label} band-limited {parcel_label} activity post-hoc effects",
             value_column="mean_effect",
             unit_column="region",
             row_column="contrast",
@@ -866,14 +1350,14 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             outputs[f"band_connectivity_{method}_omnibus"] = plot_connectivity_omnibus_matrix(
                 read_dataframe(connectivity_omnibus_path),
                 cfg.report_path(f"band_connectivity_omnibus_{method}", ext="png", branch=branch),
-                title=f"{parcel_label} band-limited connectivity omnibus statistics ({method.upper()})",
+                title=f"{state_label} {parcel_label} band-limited connectivity omnibus statistics ({method.upper()})",
             )
         connectivity_posthoc_path = cfg.cache_path("stats", _CONNECTIVITY_GROUP_POSTHOC_STEM, ext="parquet", branch=branch)
         if connectivity_posthoc_path.exists():
             outputs[f"band_connectivity_{method}_posthoc"] = plot_connectivity_posthoc_matrices(
                 read_dataframe(connectivity_posthoc_path),
                 cfg.report_path(f"band_connectivity_posthoc_{method}", ext="png", branch=branch),
-                title=f"{parcel_label} band-limited connectivity post-hoc effects ({method.upper()})",
+                title=f"{state_label} {parcel_label} band-limited connectivity post-hoc effects ({method.upper()})",
             )
         subject_path = cfg.cache_path("coupling", _CONNECTIVITY_SUBJECT_PROFILE_STEM, ext="parquet", branch=branch)
         if subject_path.exists() and connectivity_omnibus_path.exists() and connectivity_posthoc_path.exists():
@@ -893,7 +1377,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_event_activity_heatmap"] = plot_group_effects_heatmap(
             read_dataframe(group_path),
             cfg.report_path("exploratory_event_activity", ext="png", branch=branch),
-            title=f"Exploratory EEG event-locked {parcel_label} activity effects",
+            title=f"Exploratory {state_label} EEG event-locked {parcel_label} activity effects",
         )
         subject_path = cfg.cache_path("coupling", "subject_event_locked_activity", ext="parquet", branch=branch)
         if subject_path.exists():
@@ -913,7 +1397,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_event_connectivity_heatmap"] = plot_connectivity_effect_matrices(
             group_df,
             cfg.report_path("exploratory_event_connectivity", ext="png", branch=branch),
-            title=f"Exploratory EEG event-locked {parcel_label} connectivity effects ({method.upper()})",
+            title=f"Exploratory {state_label} EEG event-locked {parcel_label} connectivity effects ({method.upper()})",
         )
         subject_path = cfg.cache_path("coupling", "subject_event_locked_connectivity", ext="parquet", branch=branch)
         if subject_path.exists():
@@ -931,7 +1415,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_windowed_coupling_heatmap"] = plot_group_effects_heatmap(
             read_dataframe(group_path),
             cfg.report_path("exploratory_windowed_coupling", ext="png", branch=branch),
-            title=f"Exploratory windowed EEG occupancy and {parcel_label} coupling effects",
+            title=f"Exploratory {state_label} windowed EEG occupancy and {parcel_label} coupling effects",
         )
         subject_path = cfg.cache_path("coupling", "subject_windowed_coupling", ext="parquet", branch=branch)
         if subject_path.exists():
@@ -949,7 +1433,7 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
         outputs[f"{branch}_transition_coupling_heatmap"] = plot_transition_effect_heatmap(
             read_dataframe(group_path),
             cfg.report_path("exploratory_transition_coupling", ext="png", branch=branch),
-            title=f"Exploratory EEG transition-locked {parcel_label} coupling effects",
+            title=f"Exploratory {state_label} EEG transition-locked {parcel_label} coupling effects",
         )
         subject_path = cfg.cache_path("coupling", "subject_transition_coupling", ext="parquet", branch=branch)
         if subject_path.exists():
@@ -963,4 +1447,58 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             )
             outputs[f"{branch}_transition_coupling_subject_excel"] = table_reports["subject_transition_coupling"]
             outputs[f"{branch}_transition_coupling_group_excel"] = table_reports["group_transition_coupling"]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _DIRECT_STATE_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_direct_state_coupling_curve"] = plot_direct_coupling_lag_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_direct_state_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} direct EEG-SEEG state coupling",
+        )
+        subject_path = cfg.cache_path("coupling", _DIRECT_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _DIRECT_STATE_SUBJECT_STEM: subject_path,
+                    _DIRECT_STATE_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_direct_state_coupling_subject_excel"] = table_reports[_DIRECT_STATE_SUBJECT_STEM]
+            outputs[f"{branch}_direct_state_coupling_group_excel"] = table_reports[_DIRECT_STATE_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _LAGGED_STATE_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_lagged_state_coupling_curve"] = plot_direct_coupling_lag_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_lagged_state_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} lagged EEG-SEEG state coupling",
+        )
+        subject_path = cfg.cache_path("coupling", _LAGGED_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _LAGGED_STATE_SUBJECT_STEM: subject_path,
+                    _LAGGED_STATE_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_lagged_state_coupling_subject_excel"] = table_reports[_LAGGED_STATE_SUBJECT_STEM]
+            outputs[f"{branch}_lagged_state_coupling_group_excel"] = table_reports[_LAGGED_STATE_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _TRANSITION_STATE_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_transition_state_coupling_matrix"] = plot_state_transition_matrix(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_transition_state_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} EEG transition-conditioned SEEG state coupling",
+        )
+        subject_path = cfg.cache_path("coupling", _TRANSITION_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _TRANSITION_STATE_SUBJECT_STEM: subject_path,
+                    _TRANSITION_STATE_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_transition_state_coupling_subject_excel"] = table_reports[_TRANSITION_STATE_SUBJECT_STEM]
+            outputs[f"{branch}_transition_state_coupling_group_excel"] = table_reports[_TRANSITION_STATE_GROUP_STEM]
     return outputs

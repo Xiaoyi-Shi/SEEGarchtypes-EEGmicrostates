@@ -103,6 +103,13 @@ def test_analysis_state_changes_runtime_hash_and_cache_identity(tmp_path: Path) 
     assert ide_a_path != ide_s_path
 
 
+def test_direct_state_settings_change_runtime_hash(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    default_cfg = AnalysisConfig(artifact_root=artifact_root)
+    custom_cfg = AnalysisConfig(artifact_root=artifact_root, direct_lag_step_ms=40)
+    assert default_cfg.runtime_hash != custom_cfg.runtime_hash
+
+
 def test_run_timestamp_does_not_change_cache_identity(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     first = AnalysisConfig(artifact_root=artifact_root, run_timestamp="20260406_120000")
@@ -337,6 +344,74 @@ def test_run_exploratory_coupling_stage_reuses_cached_event_activity_outputs(tmp
     assert outputs["group_effects_excel"].exists()
 
 
+def test_run_exploratory_coupling_stage_reuses_cached_direct_state_outputs(tmp_path: Path, monkeypatch) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
+    branch = _exploratory_branch(
+        cfg,
+        "direct-state-coupling",
+        params={
+            "backend": cfg.direct_state_backend,
+            "state_count": cfg.microstate_k,
+            "components": cfg.direct_state_components,
+            "surrogates": cfg.direct_state_surrogates,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    state_paths = {
+        "features": tmp_path / "direct_state_features.parquet",
+        "labels": tmp_path / "direct_state_labels.parquet",
+    }
+    write_dataframe(pd.DataFrame({"patient_id": ["sub-01"]}), state_paths["features"])
+    write_dataframe(pd.DataFrame({"patient_id": ["sub-01"]}), state_paths["labels"])
+    monkeypatch.setattr(
+        "seeg_eegmicrostates.workflows.pipelines._ensure_direct_state_artifacts",
+        lambda *args, **kwargs: ("direct-state-shared", state_paths),
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", "subject_direct_state_coupling", ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", "group_direct_state_coupling", ext="parquet", branch=branch),
+    }
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01"],
+                "backend": [cfg.direct_state_backend],
+                "n_states": [cfg.microstate_k],
+                "lag_samples": [0],
+                "lag_ms": [0],
+                "n_samples": [10],
+                "observed_coupling": [0.4],
+                "null_mean_coupling": [0.1],
+                "effect_mean_diff": [0.3],
+                "p_perm": [0.05],
+            }
+        ),
+        cached["subject_effects"],
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "backend": [cfg.direct_state_backend],
+                "n_states": [cfg.microstate_k],
+                "lag_ms": [0],
+                "n_subjects": [7],
+                "mean_effect": [0.3],
+                "median_effect": [0.3],
+                "p_perm": [0.05],
+                "q_fdr": [0.05],
+            }
+        ),
+        cached["group_effects"],
+    )
+    outputs = run_exploratory_coupling_stage(cfg, analysis="direct-state-coupling")
+    assert outputs["state_features"] == state_paths["features"]
+    assert outputs["state_labels"] == state_paths["labels"]
+    assert outputs["subject_effects"] == cached["subject_effects"]
+    assert outputs["group_effects"] == cached["group_effects"]
+    assert outputs["subject_effects_excel"].exists()
+    assert outputs["group_effects_excel"].exists()
+
+
 def test_render_reports_discovers_exploratory_outputs(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
     event_branch = _exploratory_branch(
@@ -488,3 +563,147 @@ def test_render_reports_discovers_exploratory_outputs(tmp_path: Path) -> None:
     assert outputs[f"{connectivity_branch}_event_connectivity_heatmap"].exists()
     assert outputs[f"{windowed_branch}_windowed_coupling_heatmap"].exists()
     assert outputs[f"{transition_branch}_transition_coupling_heatmap"].exists()
+
+
+def test_render_reports_discovers_direct_state_outputs(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
+    direct_branch = _exploratory_branch(
+        cfg,
+        "direct-state-coupling",
+        params={
+            "backend": cfg.direct_state_backend,
+            "state_count": cfg.microstate_k,
+            "components": cfg.direct_state_components,
+            "surrogates": cfg.direct_state_surrogates,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01"],
+                "backend": [cfg.direct_state_backend],
+                "n_states": [cfg.microstate_k],
+                "lag_samples": [0],
+                "lag_ms": [0],
+                "n_samples": [12],
+                "observed_coupling": [0.6],
+                "null_mean_coupling": [0.2],
+                "effect_mean_diff": [0.4],
+                "p_perm": [0.02],
+            }
+        ),
+        cfg.cache_path("coupling", "subject_direct_state_coupling", ext="parquet", branch=direct_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "backend": [cfg.direct_state_backend],
+                "n_states": [cfg.microstate_k],
+                "lag_ms": [0],
+                "n_subjects": [7],
+                "mean_effect": [0.4],
+                "median_effect": [0.4],
+                "p_perm": [0.02],
+                "q_fdr": [0.02],
+            }
+        ),
+        cfg.cache_path("stats", "group_direct_state_coupling", ext="parquet", branch=direct_branch),
+    )
+
+    lagged_branch = _exploratory_branch(
+        cfg,
+        "lagged-state-coupling",
+        params={
+            "backend": cfg.direct_state_backend,
+            "state_count": cfg.microstate_k,
+            "components": cfg.direct_state_components,
+            "max_lag_ms": cfg.direct_max_lag_ms,
+            "lag_step_ms": cfg.direct_lag_step_ms,
+            "surrogates": cfg.direct_state_surrogates,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01", "sub-01", "sub-01"],
+                "backend": [cfg.direct_state_backend] * 3,
+                "n_states": [cfg.microstate_k] * 3,
+                "lag_samples": [-1, 0, 1],
+                "lag_ms": [-4, 0, 4],
+                "n_samples": [11, 12, 11],
+                "observed_coupling": [0.2, 0.5, 0.3],
+                "null_mean_coupling": [0.1, 0.2, 0.15],
+                "effect_mean_diff": [0.1, 0.3, 0.15],
+                "p_perm": [0.3, 0.02, 0.2],
+            }
+        ),
+        cfg.cache_path("coupling", "subject_lagged_state_coupling", ext="parquet", branch=lagged_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "backend": [cfg.direct_state_backend] * 3,
+                "n_states": [cfg.microstate_k] * 3,
+                "lag_ms": [-4, 0, 4],
+                "n_subjects": [7, 7, 7],
+                "mean_effect": [0.1, 0.3, 0.15],
+                "median_effect": [0.1, 0.3, 0.15],
+                "p_perm": [0.3, 0.02, 0.2],
+                "q_fdr": [0.3, 0.06, 0.3],
+            }
+        ),
+        cfg.cache_path("stats", "group_lagged_state_coupling", ext="parquet", branch=lagged_branch),
+    )
+
+    transition_state_branch = _exploratory_branch(
+        cfg,
+        "transition-state-coupling",
+        params={
+            "backend": cfg.direct_state_backend,
+            "state_count": cfg.microstate_k,
+            "components": cfg.direct_state_components,
+            "transition_window_sec": cfg.direct_transition_window_sec,
+            "surrogates": cfg.direct_state_surrogates,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01"],
+                "backend": [cfg.direct_state_backend],
+                "n_states": [cfg.microstate_k],
+                "from_state": [0],
+                "to_state": [1],
+                "n_events": [4],
+                "observed_coupling": [0.75],
+                "null_mean_coupling": [0.25],
+                "effect_mean_diff": [0.5],
+                "p_perm": [0.02],
+            }
+        ),
+        cfg.cache_path("coupling", "subject_transition_state_coupling", ext="parquet", branch=transition_state_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "backend": [cfg.direct_state_backend],
+                "n_states": [cfg.microstate_k],
+                "from_state": [0],
+                "to_state": [1],
+                "n_subjects": [7],
+                "mean_effect": [0.5],
+                "median_effect": [0.5],
+                "p_perm": [0.02],
+                "q_fdr": [0.02],
+            }
+        ),
+        cfg.cache_path("stats", "group_transition_state_coupling", ext="parquet", branch=transition_state_branch),
+    )
+
+    outputs = render_reports(cfg)
+    assert outputs[f"{direct_branch}_direct_state_coupling_curve"].exists()
+    assert outputs[f"{lagged_branch}_lagged_state_coupling_curve"].exists()
+    assert outputs[f"{transition_state_branch}_transition_state_coupling_matrix"].exists()

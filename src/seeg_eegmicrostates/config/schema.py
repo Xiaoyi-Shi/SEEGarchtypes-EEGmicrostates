@@ -53,6 +53,12 @@ YEO17_PARCELLATION_COLUMN = "cortex_319663V:Schaefer_200_17net"
 DEFAULT_EEG_TEMPLATE_RELPATH = Path("cache/eeg/ModK.fif")
 DEFAULT_ANALYSIS_STATE = "IDE_A"
 SUPPORTED_ANALYSIS_STATES: tuple[str, ...] = ("IDE_A", "IDE_S")
+DEFAULT_DIRECT_STATE_BACKEND = "pca-kmeans"
+DEFAULT_DIRECT_STATE_COMPONENTS = 3
+DEFAULT_DIRECT_STATE_SURROGATES = 128
+DEFAULT_DIRECT_MAX_LAG_MS = 500
+DEFAULT_DIRECT_LAG_STEP_MS = 100
+DEFAULT_DIRECT_TRANSITION_WINDOW_SEC = 0.25
 
 
 def _sanitize_branch(value: str) -> str:
@@ -86,6 +92,12 @@ class AnalysisConfig:
     min_group_subjects: int = 7
     seeg_parcellation_name: str = SEEG_PARCELLATION_NAME
     seeg_parcellation_column: str = SEEG_PARCELLATION_COLUMN
+    direct_state_backend: str = DEFAULT_DIRECT_STATE_BACKEND
+    direct_state_components: int = DEFAULT_DIRECT_STATE_COMPONENTS
+    direct_state_surrogates: int = DEFAULT_DIRECT_STATE_SURROGATES
+    direct_max_lag_ms: int = DEFAULT_DIRECT_MAX_LAG_MS
+    direct_lag_step_ms: int = DEFAULT_DIRECT_LAG_STEP_MS
+    direct_transition_window_sec: float = DEFAULT_DIRECT_TRANSITION_WINDOW_SEC
     standard11_channels: tuple[str, ...] = field(default=STANDARD11_CHANNELS)
     target19_channels: tuple[str, ...] = field(default=TARGET19_CHANNELS)
 
@@ -168,6 +180,12 @@ class AnalysisConfig:
                 "min_group_subjects": self.min_group_subjects,
                 "seeg_parcellation_name": self.seeg_parcellation_name,
                 "seeg_parcellation_column": self.seeg_parcellation_column,
+                "direct_state_backend": self.direct_state_backend,
+                "direct_state_components": self.direct_state_components,
+                "direct_state_surrogates": self.direct_state_surrogates,
+                "direct_max_lag_ms": self.direct_max_lag_ms,
+                "direct_lag_step_ms": self.direct_lag_step_ms,
+                "direct_transition_window_sec": self.direct_transition_window_sec,
                 "standard11_channels": self.standard11_channels,
                 "target19_channels": self.target19_channels,
             }

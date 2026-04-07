@@ -1,6 +1,6 @@
 # SEEG-EEG Microstates
 
-This repository contains a cached, staged analysis pipeline for studying synchronized scalp EEG microstates and intracranial SEEG `AAL3` region dynamics in the `IDE_A` resting-state segment. The public workflow is centered on a single `1-40 Hz` path:
+This repository contains a cached, staged analysis pipeline for studying synchronized scalp EEG microstates and intracranial SEEG `AAL3` region dynamics in the resting-state IDE segments. The public workflow defaults to `IDE_A`, supports `IDE_S` as an optional override, and is centered on a single `1-40 Hz` path:
 
 - `1-40 Hz` EEG microstate state generation
 - `1-40 Hz` SEEG `AAL3` region signal generation
@@ -18,7 +18,7 @@ The default configuration expects:
 - `datas/data_01_seeg/<patient>/MNI/Atlas.tsv`
 - `datas/info_patient.xlsx`
 
-`IDE_A` timing is read from the workbook. EEG channels are normalized to the shared 11-channel set (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`), then expanded to a standard 19-channel montage by adding missing channels as bads and restoring them with interpolation.
+Timing for the selected analysis state is read from the workbook. EEG channels are normalized to the shared 11-channel set (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`), then expanded to a standard 19-channel montage by adding missing channels as bads and restoring them with interpolation.
 
 ## Setup
 
@@ -33,6 +33,7 @@ The project requires Python `>=3.13` and uses `mne`, `pycrostates`, `pandas`, an
 
 ```bash
 uv run seeg-eegmicrostates build-index
+uv run seeg-eegmicrostates build-index --analysis-state IDE_S
 uv run seeg-eegmicrostates run-eeg-states
 uv run seeg-eegmicrostates run-eeg-states --template-fif path/to/group_template.fif
 uv run seeg-eegmicrostates run-seeg-regions
@@ -55,15 +56,15 @@ uv run seeg-eegmicrostates render-reports --run-id 20260406_230000
 
 What each command does:
 
-- `build-index`: scans recordings, loads workbook metadata, builds `IDE_A` segments, and filters the main cohort.
-- `run-eeg-states`: preprocesses EEG, restores 19 channels, loads the default `pycrostates` `ModKMeans` template at `artifacts/cache/eeg/ModK.fif`, caches a copy of the active template as `group_microstate_model_*`, and writes reusable state labels.
+- `build-index`: scans recordings, loads workbook metadata, builds segments for the selected analysis state (`IDE_A` by default, `IDE_S` optionally), and filters the main cohort.
+- `run-eeg-states`: preprocesses EEG, restores 19 channels, loads the configured default `pycrostates` `ModKMeans` template at `artifacts/cache/eeg/ModK.fif` unless `--template-fif` overrides it, caches a copy of the active template as `group_microstate_model_*`, and writes reusable state labels.
 - `run-seeg-regions`: maps bipolar channels to same-region `AAL3` pairs, rescales them onto the shared `250 Hz` analysis grid, and computes reusable raw-scale `1-40 Hz` region time series.
 - `run-activity-effects`: computes EEG-state-conditioned `AAL3` activity profiles together with four-state omnibus and pairwise post-hoc summaries from the staged caches.
 - `run-connectivity-effects`: computes primary EEG-state-conditioned `AAL3` region connectivity profiles together with omnibus and pairwise post-hoc summaries from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
-- `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels and `AAL3` region signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, or `all`.
+- `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels and `AAL3` region signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, `direct-state-coupling`, `lagged-state-coupling`, `transition-state-coupling`, or `all`.
 - `render-reports`: writes figures and Excel exports from cached results.
 
-By default, EEG state staging uses `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow.
+By default, EEG state staging uses the configured default template file `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow. If neither the override nor the configured default template exists, the EEG stage stops before labeling.
 
 Exploratory analyses are intentionally opt-in and do not change the default staged pipeline. Useful examples:
 
@@ -72,9 +73,12 @@ uv run seeg-eegmicrostates run-exploratory-coupling --analysis event-activity --
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis event-connectivity --method plv --event-window-sec 1.0
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis windowed-coupling --window-sec 20
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-coupling --min-subjects 7
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis direct-state-coupling --direct-backend pca-kmeans
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis lagged-state-coupling --max-lag-ms 200 --lag-step-ms 40
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-state-coupling --transition-window-sec 0.5
 ```
 
-The exploratory stages share staged EEG event and transition tables, write branch-hashed cache artifacts, and are picked up automatically by `render-reports` when their caches are present.
+The exploratory stages share staged EEG event and transition tables, direct state-coupling analyses additionally derive reduced-space SEEG state artifacts from the staged SEEG signals, all exploratory branches write hashed cache artifacts, and `render-reports` picks them up automatically when their caches are present.
 
 To rerun the main workflow from scratch, execute the commands in order:
 
@@ -92,9 +96,10 @@ uv run seeg-eegmicrostates render-reports
 Artifacts are written under:
 
 - `artifacts/cache/`: reusable indexed tables, preprocessed FIF files, label tables, staged region summaries, and statistics
-- `artifacts/cache/coupling/` and `artifacts/cache/stats/`: also hold exploratory event-locked, windowed, and transition summaries under hashed `explore_*` branches
+- `artifacts/cache/coupling/` and `artifacts/cache/stats/`: also hold exploratory event-locked, windowed, transition, and direct state-coupling summaries under hashed `explore_*` branches
 - `artifacts/cache/seeg/`: includes staged `AAL3` region mappings, coverage tables, and per-patient `1-40 Hz` region time series used by downstream activity and connectivity stages
 - `artifacts/cache/eeg/`: includes the active EEG template copy `group_microstate_model_*.fif`, preprocessed FIF files, restored-channel tables, and downstream microstate label tables
+- `artifacts/cache/coupling/`: direct state-coupling runs also write reduced-space SEEG state features and state-label tables that remain distinct from the maintained mainline `AAL3` outputs
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/figures/`: figures produced by a specific CLI command invocation
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/tables/`: Excel exports produced by a specific CLI command invocation
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/logs/`: per-command logs with command, timing, config hash, and output paths

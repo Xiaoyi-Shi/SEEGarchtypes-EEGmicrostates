@@ -39,11 +39,19 @@ def test_cli_describes_aal3_region_outputs() -> None:
     parser = build_parser()
     top_level_help = parser.format_help()
     action = next(action for action in parser._actions if getattr(action, "choices", None))
+    build_index_help = action.choices["build-index"].format_help()
     eeg_help = action.choices["run-eeg-states"].format_help()
+    exploratory_help = action.choices["run-exploratory-coupling"].format_help()
     assert "AAL3" in top_level_help
     assert "ModK.fif" in eeg_help
+    assert "configured default" in eeg_help
+    assert "template at artifacts/cache/eeg/ModK.fif" in eeg_help
     assert "run-seeg-regions" in top_level_help
     assert "run-exploratory-coupling" in top_level_help
+    assert "IDE_S" in build_index_help
+    assert "direct-state-coupling" in exploratory_help
+    assert "lagged-state-coupling" in exploratory_help
+    assert "transition-state-coupling" in exploratory_help
     assert "state-alignment" not in top_level_help
 
 
@@ -107,6 +115,39 @@ def test_run_exploratory_coupling_accepts_analysis_specific_options() -> None:
     assert args.min_subjects == 5
 
 
+def test_run_exploratory_coupling_accepts_direct_state_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-exploratory-coupling",
+            "--analysis",
+            "lagged-state-coupling",
+            "--direct-backend",
+            "pca-kmeans",
+            "--direct-state-count",
+            "5",
+            "--direct-components",
+            "2",
+            "--max-lag-ms",
+            "200",
+            "--lag-step-ms",
+            "40",
+            "--transition-window-sec",
+            "0.5",
+            "--direct-surrogates",
+            "64",
+        ]
+    )
+    assert args.analysis == "lagged-state-coupling"
+    assert args.direct_backend == "pca-kmeans"
+    assert args.direct_state_count == 5
+    assert args.direct_components == 2
+    assert args.max_lag_ms == 200
+    assert args.lag_step_ms == 40
+    assert args.transition_window_sec == 0.5
+    assert args.direct_surrogates == 64
+
+
 def test_cli_main_writes_command_log_into_timestamped_run_folder(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -129,5 +170,6 @@ def test_cli_main_writes_command_log_into_timestamped_run_folder(
     log_text = log_path.read_text(encoding="utf-8")
     assert "command: build-index" in log_text
     assert "status: completed" in log_text
+    assert "analysis_state: IDE_A" in log_text
     assert str(fake_output) in log_text
     assert not cfg.reports_root.exists()

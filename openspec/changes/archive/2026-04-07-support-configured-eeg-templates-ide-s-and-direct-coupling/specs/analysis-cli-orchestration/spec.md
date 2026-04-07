@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: The staged EEG command SHALL accept a template-file override
 The system SHALL allow the public EEG state generation stage to label against an active `pycrostates` `.fif` template selected from an explicit template-file override or, when none is supplied, from the configured default template path, without creating a separate top-level workflow command.
@@ -16,13 +16,6 @@ The system SHALL allow the public EEG state generation stage to label against an
 - **WHEN** a user runs the public EEG state generation stage without `--template-fif`
 - **THEN** the staged workflow SHALL use the configured default template file for EEG labeling
 - **AND** the stage SHALL stop before labeling with a clear error if that configured template file is unavailable
-
-### Requirement: Exploratory coupling analyses SHALL reuse staged upstream artifacts
-The orchestration layer SHALL allow exploratory coupling analyses to reuse the existing staged index, EEG microstate labels, and staged SEEG region signal caches without recomputing those upstream artifacts.
-
-#### Scenario: User reruns an exploratory method after changing only exploratory parameters
-- **WHEN** a user reruns an exploratory coupling analysis after the required index, EEG, and SEEG staged artifacts already exist
-- **THEN** the orchestration layer SHALL reuse the upstream staged inputs and recompute only the exploratory method outputs whose cache identity changed
 
 ### Requirement: The public CLI SHALL expose a focused staged `1-40 Hz` workflow
 The system SHALL expose a public command surface centered on the focused staged `1-40 Hz` analysis workflow, SHALL keep `IDE_A` as the default analysis state while allowing `IDE_S` as an optional override, SHALL expose the public SEEG staging step as `run-seeg-regions`, and SHALL allow only the maintained exploratory analyses explicitly supported by the region-based workflow plus the opt-in direct EEG-SEEG state-coupling branch.

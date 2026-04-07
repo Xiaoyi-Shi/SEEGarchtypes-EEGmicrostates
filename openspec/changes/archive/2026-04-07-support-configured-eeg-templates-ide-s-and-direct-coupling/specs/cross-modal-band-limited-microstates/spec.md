@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: The pipeline produces synchronized `1-40 Hz` analysis inputs for both modalities
 The system SHALL derive a shared `1-40 Hz` staged representation for EEG and SEEG from the same selected supported analysis-state cohort and the same per-patient analysis windows, SHALL keep `IDE_A` as the default analysis state while supporting `IDE_S` as an optional override, and SHALL treat staged EEG microstate labels plus staged SEEG region signals as the maintained upstream inputs for downstream activity, connectivity, and supported exploratory analyses.
@@ -18,6 +18,8 @@ Exploratory coupling analyses SHALL operate on the same eligible selected-analys
 #### Scenario: User runs an exploratory coupling method after staging the focused workflow
 - **WHEN** a user runs any exploratory coupling analysis after the shared `1-40 Hz` staged inputs exist for the selected analysis state
 - **THEN** the analysis SHALL use the same staged cohort and window definitions as the focused workflow inputs rather than deriving a separate implicit cohort
+
+## ADDED Requirements
 
 ### Requirement: Direct state-coupling analyses SHALL derive downstream-specific SEEG state artifacts from the shared staged inputs
 The system SHALL allow the exploratory direct EEG-SEEG state-coupling branch to derive reduced-space SEEG state artifacts from the shared staged EEG labels and staged SEEG signals, and SHALL keep those downstream-specific state artifacts distinct from the maintained upstream contract of EEG labels plus SEEG region signals.

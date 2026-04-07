@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: IDE_A recordings are indexed from repository data
 The system SHALL scan the repository data tree and spreadsheet metadata to produce a structured index of available EEG, reference SEEG, bipolar SEEG, and atlas resources for the selected supported analysis state, SHALL keep `IDE_A` as the default analysis state, and SHALL support `IDE_S` as an optional override.

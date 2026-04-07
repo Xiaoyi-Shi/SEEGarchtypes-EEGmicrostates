@@ -241,3 +241,63 @@ def plot_transition_effect_heatmap(
     figure.savefig(path, dpi=150)
     plt.close(figure)
     return path
+
+
+def plot_direct_coupling_lag_curve(
+    group_df: pd.DataFrame,
+    output_path: str | Path,
+    *,
+    title: str = "Direct EEG-SEEG state coupling",
+) -> Path:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure, axis = plt.subplots(figsize=(8, 4))
+    if group_df.empty:
+        axis.set_title("No direct state-coupling effects available")
+    else:
+        data = group_df.sort_values(["backend", "lag_ms"] if "backend" in group_df.columns else ["lag_ms"])
+        if "backend" in data.columns:
+            iterator = data.groupby("backend")
+        else:
+            iterator = [("direct", data)]
+        for backend, group in iterator:
+            axis.plot(group["lag_ms"], group["mean_effect"], marker="o", label=str(backend))
+        axis.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
+        axis.set_xlabel("Lag (ms)")
+        axis.set_ylabel("Mean effect")
+        axis.set_title(title)
+        if "backend" in data.columns and data["backend"].nunique() > 1:
+            axis.legend()
+    figure.tight_layout()
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+    return path
+
+
+def plot_state_transition_matrix(
+    group_df: pd.DataFrame,
+    output_path: str | Path,
+    *,
+    title: str = "Transition state coupling",
+    value_column: str = "mean_effect",
+) -> Path:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure, axis = plt.subplots(figsize=(6, 5))
+    if group_df.empty:
+        axis.set_title("No transition state-coupling effects available")
+    else:
+        pivot = group_df.pivot(index="from_state", columns="to_state", values=value_column).sort_index().sort_index(axis=1)
+        image = axis.imshow(pivot.to_numpy(), aspect="auto", cmap="RdBu_r")
+        axis.set_xticks(range(pivot.shape[1]))
+        axis.set_xticklabels(pivot.columns)
+        axis.set_yticks(range(pivot.shape[0]))
+        axis.set_yticklabels(pivot.index)
+        axis.set_xlabel("EEG to_state")
+        axis.set_ylabel("EEG from_state")
+        axis.set_title(title)
+        figure.colorbar(image, ax=axis, shrink=0.8)
+    figure.tight_layout()
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+    return path
