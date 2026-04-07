@@ -7,6 +7,7 @@ import pandas as pd
 from pycrostates.cluster import ModKMeans
 from pycrostates.io import ChData, read_cluster
 from pycrostates.preprocessing import extract_gfp_peaks
+from scipy.signal import find_peaks
 
 from seeg_eegmicrostates._utils import ensure_directory
 from seeg_eegmicrostates.config import AnalysisConfig
@@ -22,6 +23,46 @@ def extract_subject_gfp_peaks(raw19, cfg: AnalysisConfig) -> ChData:
         picks="all",
         min_peak_distance=_peak_distance_samples(cfg, raw19.info["sfreq"]),
         reject_by_annotation=True,
+    )
+
+
+def build_eeg_gfp_trace(raw19, *, patient_id: str) -> pd.DataFrame:
+    data = raw19.get_data(picks="all")
+    gfp = np.std(data, axis=0, ddof=0)
+    return pd.DataFrame(
+        {
+            "patient_id": patient_id,
+            "time_sec": raw19.times.astype(float),
+            "sample": np.arange(raw19.n_times, dtype=int),
+            "gfp": gfp.astype(float),
+        }
+    )
+
+
+def build_eeg_gfp_peak_table(
+    gfp_trace_df: pd.DataFrame,
+    cfg: AnalysisConfig,
+    *,
+    patient_id: str,
+    sfreq: float,
+) -> pd.DataFrame:
+    columns = ["patient_id", "peak_id", "event_sec", "sample", "gfp"]
+    if gfp_trace_df.empty:
+        return pd.DataFrame(columns=columns)
+    peak_indices, _ = find_peaks(
+        gfp_trace_df["gfp"].to_numpy(dtype=float),
+        distance=_peak_distance_samples(cfg, float(sfreq)),
+    )
+    if peak_indices.size == 0:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(
+        {
+            "patient_id": patient_id,
+            "peak_id": np.arange(peak_indices.size, dtype=int),
+            "event_sec": gfp_trace_df.iloc[peak_indices]["time_sec"].to_numpy(dtype=float),
+            "sample": gfp_trace_df.iloc[peak_indices]["sample"].to_numpy(dtype=int),
+            "gfp": gfp_trace_df.iloc[peak_indices]["gfp"].to_numpy(dtype=float),
+        }
     )
 
 

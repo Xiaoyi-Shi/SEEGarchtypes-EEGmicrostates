@@ -7,8 +7,16 @@ import pandas as pd
 from seeg_eegmicrostates._utils import config_hash, read_dataframe, write_dataframe, write_excel_dataframe
 from seeg_eegmicrostates.config import AnalysisConfig
 from seeg_eegmicrostates.coupling import (
+    DEFAULT_GFP_GLOBAL_METRIC,
+    DEFAULT_GFP_GLOBAL_SURROGATES,
+    DEFAULT_GFP_GLOBAL_WEIGHTING,
+    DEFAULT_GFP_PEAK_WINDOW_SEC,
+    SUPPORTED_GFP_GLOBAL_METRICS,
+    SUPPORTED_GFP_GLOBAL_WEIGHTINGS,
     align_eeg_and_seeg_state_labels,
+    align_gfp_and_global_traces,
     align_label_table_to_region_timeseries,
+    align_microstate_to_gfp_and_global,
     align_region_timeseries_to_labels,
     build_microstate_event_table,
     build_state_transition_table,
@@ -16,18 +24,28 @@ from seeg_eegmicrostates.coupling import (
     compute_subject_direct_state_coupling,
     compute_subject_event_locked_connectivity_effects,
     compute_subject_event_locked_region_effects,
+    compute_subject_gfp_controlled_microstate_profiles,
+    compute_subject_gfp_controlled_transition_effects,
+    compute_subject_gfp_global_coupling,
     compute_subject_microstate_connectivity_profiles,
     compute_subject_microstate_region_profiles,
+    compute_subject_peak_centered_global_trajectory,
     compute_subject_transition_state_coupling,
     compute_subject_windowed_region_coupling,
     compute_windowed_region_metrics,
     compute_windowed_state_metrics,
+    derive_seeg_global_metric_trace,
     derive_direct_seeg_state_artifacts,
+    global_metric_label,
     normalize_connectivity_method,
     normalize_direct_state_backend,
+    normalize_global_metric_definition,
+    normalize_global_weighting_strategy,
     sample_period_from_times,
 )
 from seeg_eegmicrostates.eeg import (
+    build_eeg_gfp_peak_table,
+    build_eeg_gfp_trace,
     label_microstates,
     load_microstate_model,
     preprocess_eeg_recording,
@@ -54,6 +72,7 @@ from seeg_eegmicrostates.viz import (
     plot_connectivity_omnibus_matrix,
     plot_connectivity_posthoc_matrices,
     plot_coverage_summary,
+    plot_effect_curve,
     plot_direct_coupling_lag_curve,
     plot_group_effects_heatmap,
     plot_group_metric_heatmap,
@@ -83,6 +102,21 @@ _LAGGED_STATE_SUBJECT_STEM = "subject_lagged_state_coupling"
 _LAGGED_STATE_GROUP_STEM = "group_lagged_state_coupling"
 _TRANSITION_STATE_SUBJECT_STEM = "subject_transition_state_coupling"
 _TRANSITION_STATE_GROUP_STEM = "group_transition_state_coupling"
+_EEG_GFP_TRACE_STEM = "gfp_trace"
+_EEG_GFP_PEAK_STEM = "gfp_peaks"
+_SEEG_GLOBAL_TRACE_STEM = "seeg_global_trace"
+_SEEG_GLOBAL_SUPPORT_STEM = "seeg_global_network_support"
+_GFP_GLOBAL_SUBJECT_STEM = "subject_gfp_global_coupling"
+_GFP_GLOBAL_GROUP_STEM = "group_gfp_global_coupling"
+_LAGGED_GFP_GLOBAL_SUBJECT_STEM = "subject_lagged_gfp_global_coupling"
+_LAGGED_GFP_GLOBAL_GROUP_STEM = "group_lagged_gfp_global_coupling"
+_PEAK_GFP_GLOBAL_SUBJECT_STEM = "subject_peak_gfp_global_coupling"
+_PEAK_GFP_GLOBAL_GROUP_STEM = "group_peak_gfp_global_coupling"
+_GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM = "subject_gfp_controlled_microstate"
+_GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM = "group_gfp_controlled_microstate_omnibus"
+_GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM = "group_gfp_controlled_microstate_posthoc"
+_GFP_CONTROLLED_TRANSITION_SUBJECT_STEM = "subject_gfp_controlled_transition"
+_GFP_CONTROLLED_TRANSITION_GROUP_STEM = "group_gfp_controlled_transition"
 _EXPLORATORY_ANALYSES = (
     "event-activity",
     "event-connectivity",
@@ -91,6 +125,11 @@ _EXPLORATORY_ANALYSES = (
     "direct-state-coupling",
     "lagged-state-coupling",
     "transition-state-coupling",
+    "gfp-global-coupling",
+    "lagged-gfp-global-coupling",
+    "peak-gfp-global-coupling",
+    "gfp-controlled-microstate",
+    "gfp-controlled-transition",
 )
 
 
@@ -191,6 +230,14 @@ def _resolve_transition_window_sec(window_sec: float | None, cfg: AnalysisConfig
     return float(window_sec if window_sec is not None else cfg.direct_transition_window_sec)
 
 
+def _resolve_global_surrogates(surrogates: int | None) -> int:
+    return max(1, int(surrogates if surrogates is not None else DEFAULT_GFP_GLOBAL_SURROGATES))
+
+
+def _resolve_peak_window_sec(window_sec: float | None) -> float:
+    return float(window_sec if window_sec is not None else DEFAULT_GFP_PEAK_WINDOW_SEC)
+
+
 def _resolve_direct_lag_grid(
     cfg: AnalysisConfig,
     *,
@@ -208,6 +255,22 @@ def _resolve_direct_lag_grid(
     if 0 not in values:
         values.append(0)
     return sorted(set(values))
+
+
+def _global_metric_artifact_branch(
+    cfg: AnalysisConfig,
+    *,
+    metric_definition: str,
+    weighting_strategy: str,
+) -> str:
+    return _exploratory_branch(
+        cfg,
+        "gfp-global-shared",
+        params={
+            "metric_definition": normalize_global_metric_definition(metric_definition),
+            "weighting_strategy": normalize_global_weighting_strategy(weighting_strategy),
+        },
+    )
 
 
 def _segment_stem(cfg: AnalysisConfig) -> str:
@@ -311,6 +374,60 @@ def _ensure_direct_state_artifacts(
     }
 
 
+def _require_yeo17_global_branch(cfg: AnalysisConfig) -> None:
+    if cfg.seeg_parcellation_name != "yeo17":
+        raise ValueError(
+            "GFP-informed global coupling currently requires --seeg-parcellation-name yeo17 "
+            f"(received {cfg.seeg_parcellation_name!r})."
+        )
+
+
+def _ensure_seeg_global_metric_artifacts(
+    cfg: AnalysisConfig,
+    *,
+    metric_definition: str,
+    weighting_strategy: str,
+) -> tuple[str, dict[str, Path]]:
+    _require_yeo17_global_branch(cfg)
+    normalized_metric = normalize_global_metric_definition(metric_definition)
+    normalized_weighting = normalize_global_weighting_strategy(weighting_strategy)
+    metric_branch = _global_metric_artifact_branch(
+        cfg,
+        metric_definition=normalized_metric,
+        weighting_strategy=normalized_weighting,
+    )
+    cached = {
+        "global_trace": cfg.cache_path("coupling", _SEEG_GLOBAL_TRACE_STEM, ext="parquet", branch=metric_branch),
+        "network_support": cfg.cache_path("coupling", _SEEG_GLOBAL_SUPPORT_STEM, ext="parquet", branch=metric_branch),
+    }
+    if _all_exist(cached):
+        return metric_branch, cached
+    region_outputs = run_seeg_regions_stage(cfg)
+    coverage_df = read_dataframe(region_outputs["coverage"])
+    cohort = _eligible_rows(cfg)
+    trace_frames: list[pd.DataFrame] = []
+    support_frames: list[pd.DataFrame] = []
+    for patient_id in cohort["patient_id"].astype(str):
+        region_df = read_dataframe(
+            cfg.cache_path("seeg", _SEEG_REGION_BAND_STEM, ext="parquet", branch=_BAND_BRANCH, patient_id=patient_id)
+        )
+        trace_df, support_df = derive_seeg_global_metric_trace(
+            region_df,
+            coverage_df[coverage_df["patient_id"] == patient_id].copy(),
+            patient_id=patient_id,
+            metric_definition=normalized_metric,
+            weighting_strategy=normalized_weighting,
+        )
+        trace_frames.append(trace_df)
+        support_frames.append(support_df)
+    traces = pd.concat(trace_frames, ignore_index=True) if trace_frames else pd.DataFrame()
+    supports = pd.concat(support_frames, ignore_index=True) if support_frames else pd.DataFrame()
+    return metric_branch, {
+        "global_trace": write_dataframe(traces, cached["global_trace"]),
+        "network_support": write_dataframe(supports, cached["network_support"]),
+    }
+
+
 def _long_activity_frame(aligned_wide_df: pd.DataFrame, *, patient_id: str) -> pd.DataFrame:
     long = aligned_wide_df.melt(
         id_vars=["patient_id", "time_sec", "microstate", "corr"],
@@ -333,6 +450,8 @@ def run_eeg_microstate_branch(
         "model": cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch=branch),
         "labels": cfg.cache_path("eeg", "microstate_labels", ext="parquet", branch=branch),
         "restored_channels": cfg.cache_path("eeg", "restored_channels", ext="parquet", branch=branch),
+        "gfp_trace": cfg.cache_path("eeg", _EEG_GFP_TRACE_STEM, ext="parquet", branch=branch),
+        "gfp_peaks": cfg.cache_path("eeg", _EEG_GFP_PEAK_STEM, ext="parquet", branch=branch),
     }
     if template_fif is None and _all_exist(cached):
         return cached
@@ -362,13 +481,28 @@ def run_eeg_microstate_branch(
         alternate_channels=cfg.standard11_channels,
     )
     model_path = save_microstate_model(model, cached["model"])
-    labels = pd.concat(
-        [label_microstates(raw, model, cfg, patient_id=patient_id) for patient_id, raw in preprocessed_raws.items()],
-        ignore_index=True,
-    )
+    label_frames: list[pd.DataFrame] = []
+    gfp_frames: list[pd.DataFrame] = []
+    peak_frames: list[pd.DataFrame] = []
+    for patient_id, raw in preprocessed_raws.items():
+        label_frames.append(label_microstates(raw, model, cfg, patient_id=patient_id))
+        gfp_trace = build_eeg_gfp_trace(raw, patient_id=patient_id)
+        gfp_frames.append(gfp_trace)
+        peak_frames.append(build_eeg_gfp_peak_table(gfp_trace, cfg, patient_id=patient_id, sfreq=float(raw.info["sfreq"])))
+    labels = pd.concat(label_frames, ignore_index=True) if label_frames else pd.DataFrame()
+    gfp_trace = pd.concat(gfp_frames, ignore_index=True) if gfp_frames else pd.DataFrame()
+    gfp_peaks = pd.concat(peak_frames, ignore_index=True) if peak_frames else pd.DataFrame()
     labels_path = write_dataframe(labels, cfg.cache_path("eeg", "microstate_labels", ext="parquet", branch=branch))
     missing_path = write_dataframe(pd.DataFrame(missing_rows), cfg.cache_path("eeg", "restored_channels", ext="parquet", branch=branch))
-    return {"model": model_path, "labels": labels_path, "restored_channels": missing_path}
+    gfp_trace_path = write_dataframe(gfp_trace, cached["gfp_trace"])
+    gfp_peaks_path = write_dataframe(gfp_peaks, cached["gfp_peaks"])
+    return {
+        "model": model_path,
+        "labels": labels_path,
+        "restored_channels": missing_path,
+        "gfp_trace": gfp_trace_path,
+        "gfp_peaks": gfp_peaks_path,
+    }
 
 
 def run_eeg_states_stage(cfg: AnalysisConfig, *, template_fif: str | Path | None = None) -> dict[str, Path]:
@@ -1114,13 +1248,577 @@ def run_exploratory_transition_state_coupling_stage(
     }
 
 
+def run_exploratory_gfp_global_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
+    global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
+    global_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_global_metric_definition(global_metric)
+    normalized_weighting = normalize_global_weighting_strategy(global_weighting)
+    surrogates = _resolve_global_surrogates(global_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _metric_branch, metric_paths = _ensure_seeg_global_metric_artifacts(
+        cfg,
+        metric_definition=normalized_metric,
+        weighting_strategy=normalized_weighting,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "gfp-global-coupling",
+        params={
+            "metric_definition": normalized_metric,
+            "weighting_strategy": normalized_weighting,
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _GFP_GLOBAL_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _GFP_GLOBAL_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _GFP_GLOBAL_SUBJECT_STEM: cached["subject_effects"],
+                _GFP_GLOBAL_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "gfp_trace": eeg_outputs["gfp_trace"],
+            "gfp_peaks": eeg_outputs["gfp_peaks"],
+            "global_trace": metric_paths["global_trace"],
+            "network_support": metric_paths["network_support"],
+            **cached,
+            "subject_effects_excel": tables[_GFP_GLOBAL_SUBJECT_STEM],
+            "group_effects_excel": tables[_GFP_GLOBAL_GROUP_STEM],
+        }
+    gfp_trace_df = read_dataframe(eeg_outputs["gfp_trace"])
+    global_trace_df = read_dataframe(metric_paths["global_trace"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_gfp_and_global_traces(
+            gfp_trace_df[gfp_trace_df["patient_id"] == patient_id],
+            global_trace_df[global_trace_df["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_gfp_global_coupling(
+                aligned,
+                patient_id=patient_id,
+                lag_samples=[0],
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    if not subject_effects.empty:
+        subject_effects["global_metric_label"] = subject_effects.apply(
+            lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+            axis=1,
+        )
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["metric_definition", "weighting_strategy", "network_scope", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    if not group_effects.empty:
+        group_effects["global_metric_label"] = group_effects.apply(
+            lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+            axis=1,
+        )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _GFP_GLOBAL_SUBJECT_STEM: subject_effects,
+            _GFP_GLOBAL_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "gfp_trace": eeg_outputs["gfp_trace"],
+        "gfp_peaks": eeg_outputs["gfp_peaks"],
+        "global_trace": metric_paths["global_trace"],
+        "network_support": metric_paths["network_support"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_GFP_GLOBAL_SUBJECT_STEM],
+        "group_effects_excel": tables[_GFP_GLOBAL_GROUP_STEM],
+    }
+
+
+def run_exploratory_lagged_gfp_global_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
+    global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
+    max_lag_ms: int | None = None,
+    lag_step_ms: int | None = None,
+    global_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_global_metric_definition(global_metric)
+    normalized_weighting = normalize_global_weighting_strategy(global_weighting)
+    surrogates = _resolve_global_surrogates(global_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _metric_branch, metric_paths = _ensure_seeg_global_metric_artifacts(
+        cfg,
+        metric_definition=normalized_metric,
+        weighting_strategy=normalized_weighting,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "lagged-gfp-global-coupling",
+        params={
+            "metric_definition": normalized_metric,
+            "weighting_strategy": normalized_weighting,
+            "max_lag_ms": int(max_lag_ms if max_lag_ms is not None else cfg.direct_max_lag_ms),
+            "lag_step_ms": int(lag_step_ms if lag_step_ms is not None else cfg.direct_lag_step_ms),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _LAGGED_GFP_GLOBAL_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _LAGGED_GFP_GLOBAL_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _LAGGED_GFP_GLOBAL_SUBJECT_STEM: cached["subject_effects"],
+                _LAGGED_GFP_GLOBAL_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "gfp_trace": eeg_outputs["gfp_trace"],
+            "gfp_peaks": eeg_outputs["gfp_peaks"],
+            "global_trace": metric_paths["global_trace"],
+            "network_support": metric_paths["network_support"],
+            **cached,
+            "subject_effects_excel": tables[_LAGGED_GFP_GLOBAL_SUBJECT_STEM],
+            "group_effects_excel": tables[_LAGGED_GFP_GLOBAL_GROUP_STEM],
+        }
+    gfp_trace_df = read_dataframe(eeg_outputs["gfp_trace"])
+    global_trace_df = read_dataframe(metric_paths["global_trace"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_gfp_and_global_traces(
+            gfp_trace_df[gfp_trace_df["patient_id"] == patient_id],
+            global_trace_df[global_trace_df["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_gfp_global_coupling(
+                aligned,
+                patient_id=patient_id,
+                lag_samples=_resolve_direct_lag_grid(
+                    cfg,
+                    sample_period_sec=sample_period,
+                    max_lag_ms=max_lag_ms,
+                    lag_step_ms=lag_step_ms,
+                ),
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    if not subject_effects.empty:
+        subject_effects["global_metric_label"] = subject_effects.apply(
+            lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+            axis=1,
+        )
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["metric_definition", "weighting_strategy", "network_scope", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    if not group_effects.empty:
+        group_effects["global_metric_label"] = group_effects.apply(
+            lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+            axis=1,
+        )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _LAGGED_GFP_GLOBAL_SUBJECT_STEM: subject_effects,
+            _LAGGED_GFP_GLOBAL_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "gfp_trace": eeg_outputs["gfp_trace"],
+        "gfp_peaks": eeg_outputs["gfp_peaks"],
+        "global_trace": metric_paths["global_trace"],
+        "network_support": metric_paths["network_support"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_LAGGED_GFP_GLOBAL_SUBJECT_STEM],
+        "group_effects_excel": tables[_LAGGED_GFP_GLOBAL_GROUP_STEM],
+    }
+
+
+def run_exploratory_peak_gfp_global_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
+    global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
+    peak_window_sec: float | None = None,
+    global_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_global_metric_definition(global_metric)
+    normalized_weighting = normalize_global_weighting_strategy(global_weighting)
+    window_sec = _resolve_peak_window_sec(peak_window_sec)
+    surrogates = _resolve_global_surrogates(global_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _metric_branch, metric_paths = _ensure_seeg_global_metric_artifacts(
+        cfg,
+        metric_definition=normalized_metric,
+        weighting_strategy=normalized_weighting,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "peak-gfp-global-coupling",
+        params={
+            "metric_definition": normalized_metric,
+            "weighting_strategy": normalized_weighting,
+            "peak_window_sec": float(window_sec),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _PEAK_GFP_GLOBAL_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _PEAK_GFP_GLOBAL_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _PEAK_GFP_GLOBAL_SUBJECT_STEM: cached["subject_effects"],
+                _PEAK_GFP_GLOBAL_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "gfp_trace": eeg_outputs["gfp_trace"],
+            "gfp_peaks": eeg_outputs["gfp_peaks"],
+            "global_trace": metric_paths["global_trace"],
+            "network_support": metric_paths["network_support"],
+            **cached,
+            "subject_effects_excel": tables[_PEAK_GFP_GLOBAL_SUBJECT_STEM],
+            "group_effects_excel": tables[_PEAK_GFP_GLOBAL_GROUP_STEM],
+        }
+    gfp_peaks_df = read_dataframe(eeg_outputs["gfp_peaks"])
+    gfp_trace_df = read_dataframe(eeg_outputs["gfp_trace"])
+    global_trace_df = read_dataframe(metric_paths["global_trace"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_gfp_and_global_traces(
+            gfp_trace_df[gfp_trace_df["patient_id"] == patient_id],
+            global_trace_df[global_trace_df["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_peak_centered_global_trajectory(
+                gfp_peaks_df[gfp_peaks_df["patient_id"] == patient_id],
+                aligned,
+                patient_id=patient_id,
+                window_sec=window_sec,
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    if not subject_effects.empty:
+        subject_effects["global_metric_label"] = subject_effects.apply(
+            lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+            axis=1,
+        )
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["metric_definition", "weighting_strategy", "network_scope", "offset_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    if not group_effects.empty:
+        group_effects["global_metric_label"] = group_effects.apply(
+            lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+            axis=1,
+        )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _PEAK_GFP_GLOBAL_SUBJECT_STEM: subject_effects,
+            _PEAK_GFP_GLOBAL_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "gfp_trace": eeg_outputs["gfp_trace"],
+        "gfp_peaks": eeg_outputs["gfp_peaks"],
+        "global_trace": metric_paths["global_trace"],
+        "network_support": metric_paths["network_support"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_PEAK_GFP_GLOBAL_SUBJECT_STEM],
+        "group_effects_excel": tables[_PEAK_GFP_GLOBAL_GROUP_STEM],
+    }
+
+
+def run_exploratory_gfp_controlled_microstate_stage(
+    cfg: AnalysisConfig,
+    *,
+    global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
+    global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_global_metric_definition(global_metric)
+    normalized_weighting = normalize_global_weighting_strategy(global_weighting)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _metric_branch, metric_paths = _ensure_seeg_global_metric_artifacts(
+        cfg,
+        metric_definition=normalized_metric,
+        weighting_strategy=normalized_weighting,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "gfp-controlled-microstate",
+        params={
+            "metric_definition": normalized_metric,
+            "weighting_strategy": normalized_weighting,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_profiles": cfg.cache_path("coupling", _GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_omnibus": cfg.cache_path("stats", _GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM, ext="parquet", branch=branch),
+        "group_posthoc": cfg.cache_path("stats", _GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM, ext="parquet", branch=branch),
+    }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM: cached["subject_profiles"],
+                _GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM: cached["group_omnibus"],
+                _GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM: cached["group_posthoc"],
+            },
+            branch=branch,
+        )
+        return {
+            "gfp_trace": eeg_outputs["gfp_trace"],
+            "global_trace": metric_paths["global_trace"],
+            "network_support": metric_paths["network_support"],
+            **cached,
+            "subject_profiles_excel": tables[_GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM],
+            "group_omnibus_excel": tables[_GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM],
+            "group_posthoc_excel": tables[_GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM],
+        }
+    label_df = read_dataframe(eeg_outputs["labels"])
+    gfp_trace_df = read_dataframe(eeg_outputs["gfp_trace"])
+    global_trace_df = read_dataframe(metric_paths["global_trace"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for patient_id in cohort["patient_id"].astype(str):
+        aligned = align_microstate_to_gfp_and_global(
+            label_df[label_df["patient_id"] == patient_id],
+            gfp_trace_df[gfp_trace_df["patient_id"] == patient_id],
+            global_trace_df[global_trace_df["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        subject_frames.append(
+            compute_subject_gfp_controlled_microstate_profiles(
+                aligned,
+                patient_id=patient_id,
+            )
+        )
+    subject_profiles = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_profiles, cached["subject_profiles"])
+    group_omnibus = run_group_profile_omnibus_statistics(
+        subject_profiles,
+        group_keys=["global_metric_label", "metric_definition", "weighting_strategy", "network_scope"],
+        value_column="adjusted_global_metric",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_omnibus_path = write_dataframe(group_omnibus, cached["group_omnibus"])
+    group_posthoc = run_group_profile_posthoc_statistics(
+        subject_profiles,
+        group_keys=["global_metric_label", "metric_definition", "weighting_strategy", "network_scope"],
+        value_column="adjusted_global_metric",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_posthoc_path = write_dataframe(group_posthoc, cached["group_posthoc"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM: subject_profiles,
+            _GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM: group_omnibus,
+            _GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM: group_posthoc,
+        },
+        branch=branch,
+    )
+    return {
+        "gfp_trace": eeg_outputs["gfp_trace"],
+        "global_trace": metric_paths["global_trace"],
+        "network_support": metric_paths["network_support"],
+        "subject_profiles": subject_path,
+        "group_omnibus": group_omnibus_path,
+        "group_posthoc": group_posthoc_path,
+        "subject_profiles_excel": tables[_GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM],
+        "group_omnibus_excel": tables[_GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM],
+        "group_posthoc_excel": tables[_GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM],
+    }
+
+
+def run_exploratory_gfp_controlled_transition_stage(
+    cfg: AnalysisConfig,
+    *,
+    global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
+    global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
+    transition_window_sec: float | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_global_metric_definition(global_metric)
+    normalized_weighting = normalize_global_weighting_strategy(global_weighting)
+    window_sec = _resolve_transition_window_sec(transition_window_sec, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    event_paths = _ensure_exploratory_event_tables(cfg)
+    _metric_branch, metric_paths = _ensure_seeg_global_metric_artifacts(
+        cfg,
+        metric_definition=normalized_metric,
+        weighting_strategy=normalized_weighting,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "gfp-controlled-transition",
+        params={
+            "metric_definition": normalized_metric,
+            "weighting_strategy": normalized_weighting,
+            "transition_window_sec": float(window_sec),
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _GFP_CONTROLLED_TRANSITION_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _GFP_CONTROLLED_TRANSITION_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _GFP_CONTROLLED_TRANSITION_SUBJECT_STEM: cached["subject_effects"],
+                _GFP_CONTROLLED_TRANSITION_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "transitions": event_paths["transitions"],
+            "gfp_trace": eeg_outputs["gfp_trace"],
+            "global_trace": metric_paths["global_trace"],
+            "network_support": metric_paths["network_support"],
+            **cached,
+            "subject_effects_excel": tables[_GFP_CONTROLLED_TRANSITION_SUBJECT_STEM],
+            "group_effects_excel": tables[_GFP_CONTROLLED_TRANSITION_GROUP_STEM],
+        }
+    transition_df = read_dataframe(event_paths["transitions"])
+    gfp_trace_df = read_dataframe(eeg_outputs["gfp_trace"])
+    global_trace_df = read_dataframe(metric_paths["global_trace"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for patient_id in cohort["patient_id"].astype(str):
+        aligned = align_gfp_and_global_traces(
+            gfp_trace_df[gfp_trace_df["patient_id"] == patient_id],
+            global_trace_df[global_trace_df["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_gfp_controlled_transition_effects(
+                transition_df[transition_df["patient_id"] == patient_id],
+                aligned,
+                patient_id=patient_id,
+                window_sec=window_sec,
+                sample_period_sec=sample_period,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["global_metric_label", "metric_definition", "weighting_strategy", "network_scope", "from_state", "to_state"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _GFP_CONTROLLED_TRANSITION_SUBJECT_STEM: subject_effects,
+            _GFP_CONTROLLED_TRANSITION_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "transitions": event_paths["transitions"],
+        "gfp_trace": eeg_outputs["gfp_trace"],
+        "global_trace": metric_paths["global_trace"],
+        "network_support": metric_paths["network_support"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_GFP_CONTROLLED_TRANSITION_SUBJECT_STEM],
+        "group_effects_excel": tables[_GFP_CONTROLLED_TRANSITION_GROUP_STEM],
+    }
+
+
 def run_exploratory_coupling_stage(
     cfg: AnalysisConfig,
     *,
     analysis: str = "all",
     method: str = "all",
+    global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
+    global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
     event_window_sec: float = 1.0,
     window_sec: float = 10.0,
+    peak_window_sec: float | None = None,
     transition_window_sec: float | None = None,
     direct_backend: str = "pca-kmeans",
     direct_state_count: int | None = None,
@@ -1128,6 +1826,7 @@ def run_exploratory_coupling_stage(
     max_lag_ms: int | None = None,
     lag_step_ms: int | None = None,
     direct_surrogates: int | None = None,
+    global_surrogates: int | None = None,
     min_subjects: int | None = None,
 ) -> dict[str, Path]:
     selected = str(analysis).strip().lower()
@@ -1137,6 +1836,7 @@ def run_exploratory_coupling_stage(
             kwargs = {
                 "event_window_sec": event_window_sec,
                 "window_sec": window_sec,
+                "peak_window_sec": peak_window_sec,
                 "transition_window_sec": transition_window_sec,
                 "direct_backend": direct_backend,
                 "direct_state_count": direct_state_count,
@@ -1144,6 +1844,9 @@ def run_exploratory_coupling_stage(
                 "max_lag_ms": max_lag_ms,
                 "lag_step_ms": lag_step_ms,
                 "direct_surrogates": direct_surrogates,
+                "global_metric": global_metric,
+                "global_weighting": global_weighting,
+                "global_surrogates": global_surrogates,
                 "min_subjects": min_subjects,
                 "method": method,
             }
@@ -1151,6 +1854,46 @@ def run_exploratory_coupling_stage(
             prefix = cfg.branch_name(item)
             for key, value in stage_outputs.items():
                 outputs[f"{prefix}_{key}"] = value
+        return outputs
+    gfp_analyses = {
+        "gfp-global-coupling",
+        "lagged-gfp-global-coupling",
+        "peak-gfp-global-coupling",
+        "gfp-controlled-microstate",
+        "gfp-controlled-transition",
+    }
+    if selected in gfp_analyses and (global_metric == "all" or global_weighting == "all"):
+        outputs: dict[str, Path] = {}
+        metrics = SUPPORTED_GFP_GLOBAL_METRICS if global_metric == "all" else (normalize_global_metric_definition(global_metric),)
+        weightings = (
+            SUPPORTED_GFP_GLOBAL_WEIGHTINGS
+            if global_weighting == "all"
+            else (normalize_global_weighting_strategy(global_weighting),)
+        )
+        for metric_definition in metrics:
+            for weighting_strategy in weightings:
+                stage_outputs = run_exploratory_coupling_stage(
+                    cfg,
+                    analysis=selected,
+                    method=method,
+                    global_metric=metric_definition,
+                    global_weighting=weighting_strategy,
+                    event_window_sec=event_window_sec,
+                    window_sec=window_sec,
+                    peak_window_sec=peak_window_sec,
+                    transition_window_sec=transition_window_sec,
+                    direct_backend=direct_backend,
+                    direct_state_count=direct_state_count,
+                    direct_components=direct_components,
+                    max_lag_ms=max_lag_ms,
+                    lag_step_ms=lag_step_ms,
+                    direct_surrogates=direct_surrogates,
+                    global_surrogates=global_surrogates,
+                    min_subjects=min_subjects,
+                )
+                combo_prefix = cfg.branch_name(f"{metric_definition}_{weighting_strategy}")
+                for key, value in stage_outputs.items():
+                    outputs[f"{combo_prefix}_{key}"] = value
         return outputs
     if selected == "event-activity":
         return run_exploratory_event_activity_stage(cfg, event_window_sec=event_window_sec, min_subjects=min_subjects)
@@ -1193,6 +1936,48 @@ def run_exploratory_coupling_stage(
             direct_components=direct_components,
             transition_window_sec=transition_window_sec,
             direct_surrogates=direct_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "gfp-global-coupling":
+        return run_exploratory_gfp_global_coupling_stage(
+            cfg,
+            global_metric=global_metric,
+            global_weighting=global_weighting,
+            global_surrogates=global_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "lagged-gfp-global-coupling":
+        return run_exploratory_lagged_gfp_global_coupling_stage(
+            cfg,
+            global_metric=global_metric,
+            global_weighting=global_weighting,
+            max_lag_ms=max_lag_ms,
+            lag_step_ms=lag_step_ms,
+            global_surrogates=global_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "peak-gfp-global-coupling":
+        return run_exploratory_peak_gfp_global_coupling_stage(
+            cfg,
+            global_metric=global_metric,
+            global_weighting=global_weighting,
+            peak_window_sec=peak_window_sec,
+            global_surrogates=global_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "gfp-controlled-microstate":
+        return run_exploratory_gfp_controlled_microstate_stage(
+            cfg,
+            global_metric=global_metric,
+            global_weighting=global_weighting,
+            min_subjects=min_subjects,
+        )
+    if selected == "gfp-controlled-transition":
+        return run_exploratory_gfp_controlled_transition_stage(
+            cfg,
+            global_metric=global_metric,
+            global_weighting=global_weighting,
+            transition_window_sec=transition_window_sec,
             min_subjects=min_subjects,
         )
     supported = ", ".join(["all", *_EXPLORATORY_ANALYSES])
@@ -1501,4 +2286,130 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             )
             outputs[f"{branch}_transition_state_coupling_subject_excel"] = table_reports[_TRANSITION_STATE_SUBJECT_STEM]
             outputs[f"{branch}_transition_state_coupling_group_excel"] = table_reports[_TRANSITION_STATE_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _GFP_GLOBAL_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_gfp_global_coupling_curve"] = plot_effect_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_gfp_global_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} EEG GFP versus SEEG global coupling",
+            x_column="lag_ms",
+            x_label="Lag (ms)",
+        )
+        subject_path = cfg.cache_path("coupling", _GFP_GLOBAL_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _GFP_GLOBAL_SUBJECT_STEM: subject_path,
+                    _GFP_GLOBAL_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_gfp_global_coupling_subject_excel"] = table_reports[_GFP_GLOBAL_SUBJECT_STEM]
+            outputs[f"{branch}_gfp_global_coupling_group_excel"] = table_reports[_GFP_GLOBAL_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _LAGGED_GFP_GLOBAL_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_lagged_gfp_global_coupling_curve"] = plot_effect_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_lagged_gfp_global_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} lagged EEG GFP versus SEEG global coupling",
+            x_column="lag_ms",
+            x_label="Lag (ms)",
+        )
+        subject_path = cfg.cache_path("coupling", _LAGGED_GFP_GLOBAL_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _LAGGED_GFP_GLOBAL_SUBJECT_STEM: subject_path,
+                    _LAGGED_GFP_GLOBAL_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_lagged_gfp_global_coupling_subject_excel"] = table_reports[_LAGGED_GFP_GLOBAL_SUBJECT_STEM]
+            outputs[f"{branch}_lagged_gfp_global_coupling_group_excel"] = table_reports[_LAGGED_GFP_GLOBAL_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _PEAK_GFP_GLOBAL_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_peak_gfp_global_coupling_curve"] = plot_effect_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_peak_gfp_global_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} EEG GFP peak-centered SEEG global trajectory",
+            x_column="offset_ms",
+            x_label="Offset (ms)",
+        )
+        subject_path = cfg.cache_path("coupling", _PEAK_GFP_GLOBAL_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _PEAK_GFP_GLOBAL_SUBJECT_STEM: subject_path,
+                    _PEAK_GFP_GLOBAL_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_peak_gfp_global_coupling_subject_excel"] = table_reports[_PEAK_GFP_GLOBAL_SUBJECT_STEM]
+            outputs[f"{branch}_peak_gfp_global_coupling_group_excel"] = table_reports[_PEAK_GFP_GLOBAL_GROUP_STEM]
+    for branch, omnibus_path in _discover_branch_paths(cfg, "stats", _GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM, ext="parquet"):
+        omnibus_df = read_dataframe(omnibus_path)
+        if not omnibus_df.empty and "global_metric_label" not in omnibus_df.columns:
+            omnibus_df["global_metric_label"] = omnibus_df.apply(
+                lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+                axis=1,
+            )
+        outputs[f"{branch}_gfp_controlled_microstate_omnibus_heatmap"] = plot_group_metric_heatmap(
+            omnibus_df,
+            cfg.report_path("exploratory_gfp_controlled_microstate_omnibus", ext="png", branch=branch),
+            title=f"Exploratory {state_label} GFP-controlled microstate omnibus statistics",
+            value_column="statistic",
+            unit_column="global_metric_label",
+        )
+        posthoc_path = cfg.cache_path("stats", _GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM, ext="parquet", branch=branch)
+        if posthoc_path.exists():
+            posthoc_df = read_dataframe(posthoc_path)
+            if not posthoc_df.empty and "global_metric_label" not in posthoc_df.columns:
+                posthoc_df["global_metric_label"] = posthoc_df.apply(
+                    lambda row: global_metric_label(str(row.metric_definition), str(row.weighting_strategy)),
+                    axis=1,
+                )
+            outputs[f"{branch}_gfp_controlled_microstate_posthoc_heatmap"] = plot_group_metric_heatmap(
+                posthoc_df,
+                cfg.report_path("exploratory_gfp_controlled_microstate_posthoc", ext="png", branch=branch),
+                title=f"Exploratory {state_label} GFP-controlled microstate post-hoc effects",
+                value_column="mean_effect",
+                unit_column="global_metric_label",
+                row_column="contrast",
+            )
+        subject_path = cfg.cache_path("coupling", _GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists() and posthoc_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM: subject_path,
+                    _GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM: omnibus_path,
+                    _GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM: posthoc_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_gfp_controlled_microstate_subject_excel"] = table_reports[_GFP_CONTROLLED_MICROSTATE_SUBJECT_STEM]
+            outputs[f"{branch}_gfp_controlled_microstate_group_omnibus_excel"] = table_reports[
+                _GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM
+            ]
+            outputs[f"{branch}_gfp_controlled_microstate_group_posthoc_excel"] = table_reports[
+                _GFP_CONTROLLED_MICROSTATE_GROUP_POSTHOC_STEM
+            ]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _GFP_CONTROLLED_TRANSITION_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_gfp_controlled_transition_matrix"] = plot_state_transition_matrix(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_gfp_controlled_transition", ext="png", branch=branch),
+            title=f"Exploratory {state_label} GFP-controlled transition-conditioned SEEG global effects",
+        )
+        subject_path = cfg.cache_path("coupling", _GFP_CONTROLLED_TRANSITION_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _GFP_CONTROLLED_TRANSITION_SUBJECT_STEM: subject_path,
+                    _GFP_CONTROLLED_TRANSITION_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_gfp_controlled_transition_subject_excel"] = table_reports[_GFP_CONTROLLED_TRANSITION_SUBJECT_STEM]
+            outputs[f"{branch}_gfp_controlled_transition_group_excel"] = table_reports[_GFP_CONTROLLED_TRANSITION_GROUP_STEM]
     return outputs

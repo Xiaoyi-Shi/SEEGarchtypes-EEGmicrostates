@@ -412,6 +412,123 @@ def test_run_exploratory_coupling_stage_reuses_cached_direct_state_outputs(tmp_p
     assert outputs["group_effects_excel"].exists()
 
 
+def test_gfp_global_branch_identity_changes_with_metric_and_weighting(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", seeg_parcellation_name="yeo17")
+    rms_branch = _exploratory_branch(
+        cfg,
+        "gfp-global-coupling",
+        params={
+            "metric_definition": "rms",
+            "weighting_strategy": "equal",
+            "surrogates": 128,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    env_branch = _exploratory_branch(
+        cfg,
+        "gfp-global-coupling",
+        params={
+            "metric_definition": "envelope-rms",
+            "weighting_strategy": "equal",
+            "surrogates": 128,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    weighted_branch = _exploratory_branch(
+        cfg,
+        "gfp-global-coupling",
+        params={
+            "metric_definition": "rms",
+            "weighting_strategy": "sqrt-channel-count",
+            "surrogates": 128,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    assert rms_branch != env_branch
+    assert rms_branch != weighted_branch
+
+
+def test_run_exploratory_coupling_stage_reuses_cached_gfp_global_outputs(tmp_path: Path, monkeypatch) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", seeg_parcellation_name="yeo17")
+    branch = _exploratory_branch(
+        cfg,
+        "gfp-global-coupling",
+        params={
+            "metric_definition": "rms",
+            "weighting_strategy": "equal",
+            "surrogates": 128,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    shared_paths = {
+        "global_trace": tmp_path / "global_trace.parquet",
+        "network_support": tmp_path / "network_support.parquet",
+    }
+    eeg_paths = {
+        "labels": tmp_path / "labels.parquet",
+        "gfp_trace": tmp_path / "gfp_trace.parquet",
+        "gfp_peaks": tmp_path / "gfp_peaks.parquet",
+    }
+    for path in (*shared_paths.values(), *eeg_paths.values()):
+        write_dataframe(pd.DataFrame({"patient_id": ["sub-01"]}), path)
+    monkeypatch.setattr(
+        "seeg_eegmicrostates.workflows.pipelines._ensure_seeg_global_metric_artifacts",
+        lambda *args, **kwargs: ("gfp-shared", shared_paths),
+    )
+    monkeypatch.setattr(
+        "seeg_eegmicrostates.workflows.pipelines.run_eeg_states_stage",
+        lambda *args, **kwargs: eeg_paths,
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", "subject_gfp_global_coupling", ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", "group_gfp_global_coupling", ext="parquet", branch=branch),
+    }
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01"],
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "lag_samples": [0],
+                "lag_ms": [0],
+                "n_samples": [10],
+                "n_networks_used": [3],
+                "observed_coupling": [0.4],
+                "null_mean_coupling": [0.1],
+                "effect_mean_diff": [0.3],
+                "p_perm": [0.05],
+                "global_metric_label": ["rms__equal"],
+            }
+        ),
+        cached["subject_effects"],
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "lag_ms": [0],
+                "n_subjects": [7],
+                "mean_effect": [0.3],
+                "median_effect": [0.3],
+                "p_perm": [0.05],
+                "q_fdr": [0.05],
+                "global_metric_label": ["rms__equal"],
+            }
+        ),
+        cached["group_effects"],
+    )
+    outputs = run_exploratory_coupling_stage(cfg, analysis="gfp-global-coupling")
+    assert outputs["global_trace"] == shared_paths["global_trace"]
+    assert outputs["network_support"] == shared_paths["network_support"]
+    assert outputs["subject_effects"] == cached["subject_effects"]
+    assert outputs["group_effects"] == cached["group_effects"]
+    assert outputs["subject_effects_excel"].exists()
+    assert outputs["group_effects_excel"].exists()
+
+
 def test_render_reports_discovers_exploratory_outputs(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
     event_branch = _exploratory_branch(
@@ -707,3 +824,228 @@ def test_render_reports_discovers_direct_state_outputs(tmp_path: Path) -> None:
     assert outputs[f"{direct_branch}_direct_state_coupling_curve"].exists()
     assert outputs[f"{lagged_branch}_lagged_state_coupling_curve"].exists()
     assert outputs[f"{transition_state_branch}_transition_state_coupling_matrix"].exists()
+
+
+def test_render_reports_discovers_gfp_global_outputs(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456", seeg_parcellation_name="yeo17")
+    gfp_branch = _exploratory_branch(
+        cfg,
+        "gfp-global-coupling",
+        params={
+            "metric_definition": "rms",
+            "weighting_strategy": "equal",
+            "surrogates": 128,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01"],
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "lag_samples": [0],
+                "lag_ms": [0],
+                "n_samples": [12],
+                "n_networks_used": [3],
+                "observed_coupling": [0.6],
+                "null_mean_coupling": [0.2],
+                "effect_mean_diff": [0.4],
+                "p_perm": [0.02],
+                "global_metric_label": ["rms__equal"],
+            }
+        ),
+        cfg.cache_path("coupling", "subject_gfp_global_coupling", ext="parquet", branch=gfp_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "lag_ms": [0],
+                "n_subjects": [7],
+                "mean_effect": [0.4],
+                "median_effect": [0.4],
+                "p_perm": [0.02],
+                "q_fdr": [0.02],
+                "global_metric_label": ["rms__equal"],
+            }
+        ),
+        cfg.cache_path("stats", "group_gfp_global_coupling", ext="parquet", branch=gfp_branch),
+    )
+
+    peak_branch = _exploratory_branch(
+        cfg,
+        "peak-gfp-global-coupling",
+        params={
+            "metric_definition": "rms",
+            "weighting_strategy": "equal",
+            "peak_window_sec": 0.5,
+            "surrogates": 128,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01", "sub-01", "sub-01"],
+                "metric_definition": ["rms"] * 3,
+                "weighting_strategy": ["equal"] * 3,
+                "network_scope": ["yeo17-core"] * 3,
+                "offset_samples": [-1, 0, 1],
+                "offset_ms": [-4, 0, 4],
+                "n_events": [3, 3, 3],
+                "n_networks_used": [3, 3, 3],
+                "observed_coupling": [0.1, 0.3, 0.2],
+                "null_mean_coupling": [0.0, 0.1, 0.05],
+                "effect_mean_diff": [0.1, 0.2, 0.15],
+                "p_perm": [0.3, 0.02, 0.2],
+                "global_metric_label": ["rms__equal"] * 3,
+            }
+        ),
+        cfg.cache_path("coupling", "subject_peak_gfp_global_coupling", ext="parquet", branch=peak_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "metric_definition": ["rms"] * 3,
+                "weighting_strategy": ["equal"] * 3,
+                "network_scope": ["yeo17-core"] * 3,
+                "offset_ms": [-4, 0, 4],
+                "n_subjects": [7, 7, 7],
+                "mean_effect": [0.1, 0.2, 0.15],
+                "median_effect": [0.1, 0.2, 0.15],
+                "p_perm": [0.3, 0.02, 0.2],
+                "q_fdr": [0.3, 0.06, 0.3],
+                "global_metric_label": ["rms__equal"] * 3,
+            }
+        ),
+        cfg.cache_path("stats", "group_peak_gfp_global_coupling", ext="parquet", branch=peak_branch),
+    )
+
+    microstate_branch = _exploratory_branch(
+        cfg,
+        "gfp-controlled-microstate",
+        params={
+            "metric_definition": "rms",
+            "weighting_strategy": "equal",
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01"] * 4,
+                "global_metric_label": ["rms__equal"] * 4,
+                "metric_definition": ["rms"] * 4,
+                "weighting_strategy": ["equal"] * 4,
+                "network_scope": ["yeo17-core"] * 4,
+                "microstate": [0, 1, 2, 3],
+                "adjusted_global_metric": [0.1, 0.3, 0.2, 0.4],
+                "raw_global_metric": [0.1, 0.3, 0.2, 0.4],
+                "n_state_samples": [10, 10, 10, 10],
+                "mean_state_gfp": [0.2, 0.4, 0.3, 0.5],
+                "gfp_beta": [0.5, 0.5, 0.5, 0.5],
+                "n_networks_used": [3, 3, 3, 3],
+            }
+        ),
+        cfg.cache_path("coupling", "subject_gfp_controlled_microstate", ext="parquet", branch=microstate_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "global_metric_label": ["rms__equal"],
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "n_subjects": [7],
+                "statistic": [4.2],
+                "p_perm": [0.01],
+                "mean_state_0": [0.1],
+                "mean_state_1": [0.3],
+                "mean_state_2": [0.2],
+                "mean_state_3": [0.4],
+                "q_fdr": [0.01],
+            }
+        ),
+        cfg.cache_path("stats", "group_gfp_controlled_microstate_omnibus", ext="parquet", branch=microstate_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "global_metric_label": ["rms__equal"],
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "microstate_a": [0],
+                "microstate_b": [1],
+                "n_subjects": [7],
+                "mean_state_a": [0.1],
+                "mean_state_b": [0.3],
+                "mean_effect": [0.2],
+                "median_effect": [0.2],
+                "p_perm": [0.02],
+                "q_fdr": [0.02],
+            }
+        ),
+        cfg.cache_path("stats", "group_gfp_controlled_microstate_posthoc", ext="parquet", branch=microstate_branch),
+    )
+
+    transition_branch = _exploratory_branch(
+        cfg,
+        "gfp-controlled-transition",
+        params={
+            "metric_definition": "rms",
+            "weighting_strategy": "equal",
+            "transition_window_sec": cfg.direct_transition_window_sec,
+            "min_subjects": cfg.min_group_subjects,
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01"],
+                "global_metric_label": ["rms__equal"],
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "from_state": [0],
+                "to_state": [1],
+                "n_events": [4],
+                "n_samples": [40],
+                "pre_value": [0.2],
+                "post_value": [0.5],
+                "effect_mean_diff": [0.3],
+                "gfp_beta": [0.4],
+                "n_networks_used": [3],
+            }
+        ),
+        cfg.cache_path("coupling", "subject_gfp_controlled_transition", ext="parquet", branch=transition_branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "global_metric_label": ["rms__equal"],
+                "metric_definition": ["rms"],
+                "weighting_strategy": ["equal"],
+                "network_scope": ["yeo17-core"],
+                "from_state": [0],
+                "to_state": [1],
+                "n_subjects": [7],
+                "mean_effect": [0.3],
+                "median_effect": [0.3],
+                "p_perm": [0.02],
+                "q_fdr": [0.02],
+            }
+        ),
+        cfg.cache_path("stats", "group_gfp_controlled_transition", ext="parquet", branch=transition_branch),
+    )
+
+    outputs = render_reports(cfg)
+    assert outputs[f"{gfp_branch}_gfp_global_coupling_curve"].exists()
+    assert outputs[f"{peak_branch}_peak_gfp_global_coupling_curve"].exists()
+    assert outputs[f"{microstate_branch}_gfp_controlled_microstate_omnibus_heatmap"].exists()
+    assert outputs[f"{microstate_branch}_gfp_controlled_microstate_posthoc_heatmap"].exists()
+    assert outputs[f"{transition_branch}_gfp_controlled_transition_matrix"].exists()

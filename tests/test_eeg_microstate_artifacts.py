@@ -129,11 +129,15 @@ def test_run_eeg_states_stage_uses_external_template_without_refitting(tmp_path:
 
     outputs = run_eeg_states_stage(cfg, template_fif=str(external_path))
     labels = read_dataframe(outputs["labels"])
+    gfp_trace = read_dataframe(outputs["gfp_trace"])
+    gfp_peaks = read_dataframe(outputs["gfp_peaks"])
     staged_model = load_microstate_model(outputs["model"])
     assert fit_calls["count"] == 0
     assert outputs["model"].suffix == ".fif"
     assert outputs["model"].exists()
     assert labels["patient_id"].tolist() == ["sub-01"] * raw.n_times
+    assert gfp_trace["sample"].tolist() == labels["sample"].tolist()
+    assert not gfp_peaks.empty
     assert tuple(staged_model.info["ch_names"]) == cfg.standard11_channels
 
 
@@ -155,10 +159,14 @@ def test_run_eeg_states_stage_uses_default_template_without_refitting(tmp_path: 
 
     outputs = run_eeg_states_stage(cfg)
     labels = read_dataframe(outputs["labels"])
+    gfp_trace = read_dataframe(outputs["gfp_trace"])
+    gfp_peaks = read_dataframe(outputs["gfp_peaks"])
     staged_model = load_microstate_model(outputs["model"])
     assert fit_calls["count"] == 0
     assert outputs["model"].exists()
     assert labels["patient_id"].tolist() == ["sub-01"] * raw.n_times
+    assert len(gfp_trace) == len(labels)
+    assert {"patient_id", "peak_id", "event_sec", "sample", "gfp"} == set(gfp_peaks.columns)
     assert tuple(staged_model.info["ch_names"]) == cfg.target19_channels
 
 
@@ -191,3 +199,30 @@ def test_render_reports_writes_microstate_topography_from_fif_model(tmp_path: Pa
     save_microstate_model(model, cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch="band_1_40"))
     outputs = render_reports(cfg)
     assert outputs["microstates"].exists()
+
+
+def test_run_eeg_states_stage_reuses_cached_gfp_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
+    cached = {
+        "model": cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch="band_1_40"),
+        "labels": cfg.cache_path("eeg", "microstate_labels", ext="parquet", branch="band_1_40"),
+        "restored_channels": cfg.cache_path("eeg", "restored_channels", ext="parquet", branch="band_1_40"),
+        "gfp_trace": cfg.cache_path("eeg", "gfp_trace", ext="parquet", branch="band_1_40"),
+        "gfp_peaks": cfg.cache_path("eeg", "gfp_peaks", ext="parquet", branch="band_1_40"),
+    }
+    model = _fit_model(_make_raw(cfg), cfg)
+    save_microstate_model(model, cached["model"])
+    readback = pd.DataFrame({"patient_id": ["sub-01"], "sample": [0]})
+    readback.to_parquet(cached["labels"], index=False)
+    readback.to_parquet(cached["restored_channels"], index=False)
+    pd.DataFrame({"patient_id": ["sub-01"], "sample": [0], "time_sec": [0.0], "gfp": [1.0]}).to_parquet(
+        cached["gfp_trace"],
+        index=False,
+    )
+    pd.DataFrame({"patient_id": ["sub-01"], "peak_id": [0], "event_sec": [0.0], "sample": [0], "gfp": [1.0]}).to_parquet(
+        cached["gfp_peaks"],
+        index=False,
+    )
+    monkeypatch.setattr(pipelines, "_eligible_rows", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should reuse cached EEG artifacts")))
+    outputs = run_eeg_states_stage(cfg)
+    assert outputs == cached

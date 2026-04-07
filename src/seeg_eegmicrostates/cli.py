@@ -17,7 +17,15 @@ from seeg_eegmicrostates.config import (
     SEEG_PARCELLATION_NAME,
     SUPPORTED_ANALYSIS_STATES,
 )
-from seeg_eegmicrostates.coupling import SUPPORTED_DIRECT_STATE_BACKENDS
+from seeg_eegmicrostates.coupling import (
+    DEFAULT_GFP_GLOBAL_METRIC,
+    DEFAULT_GFP_GLOBAL_SURROGATES,
+    DEFAULT_GFP_GLOBAL_WEIGHTING,
+    DEFAULT_GFP_PEAK_WINDOW_SEC,
+    SUPPORTED_DIRECT_STATE_BACKENDS,
+    SUPPORTED_GFP_GLOBAL_METRICS,
+    SUPPORTED_GFP_GLOBAL_WEIGHTINGS,
+)
 from seeg_eegmicrostates.workflows import (
     build_index_artifacts,
     render_reports,
@@ -37,6 +45,11 @@ _EXPLORATORY_ANALYSIS_CHOICES = (
     "direct-state-coupling",
     "lagged-state-coupling",
     "transition-state-coupling",
+    "gfp-global-coupling",
+    "lagged-gfp-global-coupling",
+    "peak-gfp-global-coupling",
+    "gfp-controlled-microstate",
+    "gfp-controlled-transition",
 )
 
 
@@ -91,13 +104,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     exploratory_parser.add_argument("--analysis", default="all", choices=["all", *_EXPLORATORY_ANALYSIS_CHOICES])
     exploratory_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
+    exploratory_parser.add_argument(
+        "--global-metric",
+        default=DEFAULT_GFP_GLOBAL_METRIC,
+        choices=[*SUPPORTED_GFP_GLOBAL_METRICS, "all"],
+        help="SEEG global metric definition used by GFP-informed exploratory analyses.",
+    )
+    exploratory_parser.add_argument(
+        "--global-weighting",
+        default=DEFAULT_GFP_GLOBAL_WEIGHTING,
+        choices=[*SUPPORTED_GFP_GLOBAL_WEIGHTINGS, "all"],
+        help="Weighting strategy used when aggregating Yeo17 core-network signals into a SEEG global metric.",
+    )
     exploratory_parser.add_argument("--event-window-sec", type=float, default=1.0)
     exploratory_parser.add_argument("--window-sec", type=float, default=10.0)
+    exploratory_parser.add_argument(
+        "--peak-window-sec",
+        type=float,
+        default=DEFAULT_GFP_PEAK_WINDOW_SEC,
+        help="Half-window size in seconds used by EEG GFP peak-centered SEEG global trajectory analyses.",
+    )
     exploratory_parser.add_argument(
         "--transition-window-sec",
         type=float,
         default=DEFAULT_DIRECT_TRANSITION_WINDOW_SEC,
-        help="Window size in seconds used by direct transition-state coupling analyses.",
+        help="Window size in seconds used by transition-conditioned exploratory analyses.",
     )
     exploratory_parser.add_argument(
         "--direct-backend",
@@ -134,6 +165,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_DIRECT_STATE_SURROGATES,
         help="Number of circular-shift surrogates used by direct EEG-SEEG state coupling statistics.",
+    )
+    exploratory_parser.add_argument(
+        "--global-surrogates",
+        type=int,
+        default=DEFAULT_GFP_GLOBAL_SURROGATES,
+        help="Number of circular-shift surrogates used by GFP-informed global coupling statistics.",
     )
     exploratory_parser.add_argument(
         "--min-subjects",
@@ -211,8 +248,11 @@ def main(argv: list[str] | None = None) -> None:
                 cfg,
                 analysis=args.analysis,
                 method=args.method,
+                global_metric=args.global_metric,
+                global_weighting=args.global_weighting,
                 event_window_sec=args.event_window_sec,
                 window_sec=args.window_sec,
+                peak_window_sec=args.peak_window_sec,
                 transition_window_sec=args.transition_window_sec,
                 direct_backend=args.direct_backend,
                 direct_state_count=args.direct_state_count,
@@ -220,6 +260,7 @@ def main(argv: list[str] | None = None) -> None:
                 max_lag_ms=args.max_lag_ms,
                 lag_step_ms=args.lag_step_ms,
                 direct_surrogates=args.direct_surrogates,
+                global_surrogates=args.global_surrogates,
                 min_subjects=args.min_subjects,
             )
         elif args.command == "render-reports":

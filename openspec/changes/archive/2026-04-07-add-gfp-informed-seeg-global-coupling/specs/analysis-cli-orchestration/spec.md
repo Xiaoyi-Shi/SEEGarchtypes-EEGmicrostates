@@ -1,28 +1,4 @@
-## Requirements
-
-### Requirement: The staged EEG command SHALL accept a template-file override
-The system SHALL allow the public EEG state generation stage to label against an active `pycrostates` `.fif` template selected from an explicit template-file override or, when none is supplied, from the configured default template path, without creating a separate top-level workflow command.
-
-#### Scenario: User inspects EEG stage help
-- **WHEN** a user requests help for the public EEG state generation stage
-- **THEN** the command SHALL expose a template-file input for supplying an external `pycrostates` cluster solution
-- **AND** the help text SHALL describe that the stage otherwise uses the configured default template file
-
-#### Scenario: User runs the staged EEG command with a template override
-- **WHEN** a user supplies an external template file to the public EEG state generation stage
-- **THEN** the staged workflow SHALL use that template file for EEG labeling while keeping downstream cache locations compatible with the rest of the public workflow
-
-#### Scenario: User runs the staged EEG command without a template override
-- **WHEN** a user runs the public EEG state generation stage without `--template-fif`
-- **THEN** the staged workflow SHALL use the configured default template file for EEG labeling
-- **AND** the stage SHALL stop before labeling with a clear error if that configured template file is unavailable
-
-### Requirement: Exploratory coupling analyses SHALL reuse staged upstream artifacts
-The orchestration layer SHALL allow exploratory coupling analyses to reuse the existing staged index, EEG microstate labels, staged EEG GFP artifacts, and staged SEEG region signal caches without recomputing those upstream artifacts.
-
-#### Scenario: User reruns an exploratory method after changing only exploratory parameters
-- **WHEN** a user reruns an exploratory coupling analysis after the required index, EEG, GFP, and SEEG staged artifacts already exist
-- **THEN** the orchestration layer SHALL reuse the upstream staged inputs and recompute only the exploratory method outputs whose cache identity changed
+## MODIFIED Requirements
 
 ### Requirement: The public CLI SHALL expose a focused staged `1-40 Hz` workflow
 The system SHALL expose a public command surface centered on the focused staged `1-40 Hz` analysis workflow, SHALL keep `IDE_A` as the default analysis state while allowing `IDE_S` as an optional override, SHALL expose the public SEEG staging step as `run-seeg-regions`, and SHALL allow only the maintained exploratory analyses explicitly supported by the region-based workflow plus the opt-in direct EEG-SEEG state-coupling branch and GFP-informed global-coupling branch.
@@ -38,20 +14,12 @@ The system SHALL expose a public command surface centered on the focused staged 
 - **WHEN** the streamlined CLI is released with the region-oriented command surface, direct-coupling exploratory extensions, and GFP-informed global exploratory extensions
 - **THEN** legacy public commands or maintained command aliases for HFA staging, HFA coupling, the old SEEG-microstate cross-modal branch, and `run-seeg-networks` SHALL not define the public workflow
 
-### Requirement: Each public stage SHALL persist reusable intermediate artifacts
-The system SHALL persist stage outputs so users can rerun downstream analysis steps without recomputing upstream stages, SHALL keep those reusable artifacts distinct by selected analysis state, and SHALL allow exploratory direct state-coupling reruns to reuse matching upstream staged artifacts.
+### Requirement: Exploratory coupling analyses SHALL reuse staged upstream artifacts
+The orchestration layer SHALL allow exploratory coupling analyses to reuse the existing staged index, EEG microstate labels, staged EEG GFP artifacts, and staged SEEG region signal caches without recomputing those upstream artifacts.
 
-#### Scenario: Upstream EEG state artifacts already exist
-- **WHEN** a downstream activity or connectivity stage runs after EEG state artifacts were already generated for the selected analysis state
-- **THEN** the downstream stage SHALL reuse the cached EEG state artifacts rather than recomputing them
-
-#### Scenario: User debugs a downstream method change
-- **WHEN** a user reruns connectivity effects after changing only the connectivity method or downstream statistics
-- **THEN** the workflow SHALL allow the user to reuse the existing index, EEG state, and staged `AAL3` region caches for the same selected analysis state
-
-#### Scenario: User reruns a direct state-coupling analysis after changing only direct-branch parameters
-- **WHEN** a user reruns a direct EEG-SEEG state-coupling analysis after the required index, EEG, and staged SEEG signal artifacts already exist for the selected analysis state
-- **THEN** the workflow SHALL reuse the matching upstream staged inputs and recompute only the direct-coupling branch outputs whose cache identity changed
+#### Scenario: User reruns an exploratory method after changing only exploratory parameters
+- **WHEN** a user reruns an exploratory coupling analysis after the required index, EEG, GFP, and SEEG staged artifacts already exist
+- **THEN** the orchestration layer SHALL reuse the upstream staged inputs and recompute only the exploratory method outputs whose cache identity changed
 
 ### Requirement: Reports SHALL be exported from staged analysis results
 The system SHALL export figures and table outputs from the staged workflow into report directories without requiring users to manually transform cached results, SHALL render EEG microstate figures from the native staged `pycrostates` model artifact when it is available, SHALL export focused-workflow omnibus and post-hoc report artifacts for the main activity and connectivity stages when those caches exist, and SHALL export maintained exploratory region-signal, direct state-coupling, and GFP-informed global-coupling reports whenever the corresponding exploratory caches exist for the selected analysis state.

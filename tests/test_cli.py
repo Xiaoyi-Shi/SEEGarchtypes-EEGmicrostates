@@ -52,6 +52,11 @@ def test_cli_describes_aal3_region_outputs() -> None:
     assert "direct-state-coupling" in exploratory_help
     assert "lagged-state-coupling" in exploratory_help
     assert "transition-state-coupling" in exploratory_help
+    assert "gfp-global-coupling" in exploratory_help
+    assert "lagged-gfp-global-coupling" in exploratory_help
+    assert "peak-gfp-global-coupling" in exploratory_help
+    assert "gfp-controlled-microstate" in exploratory_help
+    assert "gfp-controlled-transition" in exploratory_help
     assert "state-alignment" not in top_level_help
 
 
@@ -146,6 +151,30 @@ def test_run_exploratory_coupling_accepts_direct_state_options() -> None:
     assert args.lag_step_ms == 40
     assert args.transition_window_sec == 0.5
     assert args.direct_surrogates == 64
+
+
+def test_run_exploratory_coupling_accepts_gfp_global_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-exploratory-coupling",
+            "--analysis",
+            "peak-gfp-global-coupling",
+            "--global-metric",
+            "envelope-rms",
+            "--global-weighting",
+            "sqrt-channel-count",
+            "--peak-window-sec",
+            "0.75",
+            "--global-surrogates",
+            "96",
+        ]
+    )
+    assert args.analysis == "peak-gfp-global-coupling"
+    assert args.global_metric == "envelope-rms"
+    assert args.global_weighting == "sqrt-channel-count"
+    assert args.peak_window_sec == 0.75
+    assert args.global_surrogates == 96
 
 
 def test_cli_main_writes_command_log_into_timestamped_run_folder(

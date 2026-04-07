@@ -1,11 +1,12 @@
 # SEEG-EEG Microstates
 
-This repository contains a cached, staged analysis pipeline for studying synchronized scalp EEG microstates and intracranial SEEG `AAL3` region dynamics in the resting-state IDE segments. The public workflow defaults to `IDE_A`, supports `IDE_S` as an optional override, and is centered on a single `1-40 Hz` path:
+This repository contains a cached, staged analysis pipeline for studying synchronized scalp EEG microstates and intracranial SEEG dynamics in resting-state IDE segments. The public workflow defaults to `IDE_A`, supports `IDE_S` as an optional override, and is centered on a single `1-40 Hz` path:
 
 - `1-40 Hz` EEG microstate state generation
 - `1-40 Hz` SEEG `AAL3` region signal generation
 - EEG-state-conditioned `AAL3` activity profiles plus four-state omnibus/post-hoc outputs
 - EEG-state-conditioned `AAL3` connectivity profiles plus four-state omnibus/post-hoc outputs (`corr`, `PLV`, `wPLI`)
+- opt-in exploratory branches for direct EEG-SEEG state coupling and Yeo17 GFP-informed global coupling
 
 The code is organized for recomputation from intermediate artifacts rather than notebook-only analysis.
 
@@ -57,11 +58,11 @@ uv run seeg-eegmicrostates render-reports --run-id 20260406_230000
 What each command does:
 
 - `build-index`: scans recordings, loads workbook metadata, builds segments for the selected analysis state (`IDE_A` by default, `IDE_S` optionally), and filters the main cohort.
-- `run-eeg-states`: preprocesses EEG, restores 19 channels, loads the configured default `pycrostates` `ModKMeans` template at `artifacts/cache/eeg/ModK.fif` unless `--template-fif` overrides it, caches a copy of the active template as `group_microstate_model_*`, and writes reusable state labels.
+- `run-eeg-states`: preprocesses EEG, restores 19 channels, loads the configured default `pycrostates` `ModKMeans` template at `artifacts/cache/eeg/ModK.fif` unless `--template-fif` overrides it, caches a copy of the active template as `group_microstate_model_*`, and writes reusable state labels together with aligned EEG GFP traces and GFP peak tables.
 - `run-seeg-regions`: maps bipolar channels to same-region `AAL3` pairs, rescales them onto the shared `250 Hz` analysis grid, and computes reusable raw-scale `1-40 Hz` region time series.
 - `run-activity-effects`: computes EEG-state-conditioned `AAL3` activity profiles together with four-state omnibus and pairwise post-hoc summaries from the staged caches.
 - `run-connectivity-effects`: computes primary EEG-state-conditioned `AAL3` region connectivity profiles together with omnibus and pairwise post-hoc summaries from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
-- `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels and `AAL3` region signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, `direct-state-coupling`, `lagged-state-coupling`, `transition-state-coupling`, or `all`.
+- `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels, staged EEG GFP artifacts, and staged SEEG signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, `direct-state-coupling`, `lagged-state-coupling`, `transition-state-coupling`, `gfp-global-coupling`, `lagged-gfp-global-coupling`, `peak-gfp-global-coupling`, `gfp-controlled-microstate`, `gfp-controlled-transition`, or `all`.
 - `render-reports`: writes figures and Excel exports from cached results.
 
 By default, EEG state staging uses the configured default template file `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow. If neither the override nor the configured default template exists, the EEG stage stops before labeling.
@@ -76,9 +77,27 @@ uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-coupli
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis direct-state-coupling --direct-backend pca-kmeans
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis lagged-state-coupling --max-lag-ms 200 --lag-step-ms 40
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-state-coupling --transition-window-sec 0.5
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-global-coupling --seeg-parcellation-name yeo17
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis lagged-gfp-global-coupling --seeg-parcellation-name yeo17 --global-metric all
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis peak-gfp-global-coupling --seeg-parcellation-name yeo17 --peak-window-sec 0.5
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-controlled-microstate --seeg-parcellation-name yeo17
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-controlled-transition --seeg-parcellation-name yeo17 --transition-window-sec 0.25
 ```
 
-The exploratory stages share staged EEG event and transition tables, direct state-coupling analyses additionally derive reduced-space SEEG state artifacts from the staged SEEG signals, all exploratory branches write hashed cache artifacts, and `render-reports` picks them up automatically when their caches are present.
+The exploratory stages share staged EEG event and transition tables. Direct state-coupling analyses additionally derive reduced-space SEEG state artifacts from the staged SEEG signals. GFP-informed global analyses currently target `Yeo17` staged SEEG signals and compare continuous EEG GFP against a predefined family of SEEG global metrics:
+
+- primary: equal-weight `rms` over within-patient standardized Yeo17 core-network signals
+- sensitivity: `envelope-rms`
+- sensitivity: `spatial-std`
+- optional weighting sensitivity: `sqrt-channel-count`
+
+The intended interpretation ladder is:
+
+1. quantify shared EEG GFP versus SEEG global coupling
+2. inspect symmetric GFP peak-centered SEEG trajectories without assuming lead or lag
+3. test whether microstate or transition effects remain after controlling for EEG GFP
+
+If a GFP-controlled follow-up remains positive, it suggests state identity adds information beyond shared global amplitude dynamics. If it disappears after GFP control, the cleaner interpretation is that the observed coupling is mainly a shared global-drive effect.
 
 To rerun the main workflow from scratch, execute the commands in order:
 
@@ -98,8 +117,8 @@ Artifacts are written under:
 - `artifacts/cache/`: reusable indexed tables, preprocessed FIF files, label tables, staged region summaries, and statistics
 - `artifacts/cache/coupling/` and `artifacts/cache/stats/`: also hold exploratory event-locked, windowed, transition, and direct state-coupling summaries under hashed `explore_*` branches
 - `artifacts/cache/seeg/`: includes staged `AAL3` region mappings, coverage tables, and per-patient `1-40 Hz` region time series used by downstream activity and connectivity stages
-- `artifacts/cache/eeg/`: includes the active EEG template copy `group_microstate_model_*.fif`, preprocessed FIF files, restored-channel tables, and downstream microstate label tables
-- `artifacts/cache/coupling/`: direct state-coupling runs also write reduced-space SEEG state features and state-label tables that remain distinct from the maintained mainline `AAL3` outputs
+- `artifacts/cache/eeg/`: includes the active EEG template copy `group_microstate_model_*.fif`, preprocessed FIF files, restored-channel tables, downstream microstate label tables, and reusable `gfp_trace_*` / `gfp_peaks_*` artifacts
+- `artifacts/cache/coupling/`: direct state-coupling runs also write reduced-space SEEG state features and state-label tables, while GFP-informed runs write branch-specific Yeo17 SEEG global traces, network-support tables, continuous coupling summaries, peak-centered trajectories, and GFP-controlled follow-up summaries
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/figures/`: figures produced by a specific CLI command invocation
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/tables/`: Excel exports produced by a specific CLI command invocation
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/logs/`: per-command logs with command, timing, config hash, and output paths

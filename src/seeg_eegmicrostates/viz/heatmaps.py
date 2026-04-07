@@ -243,35 +243,59 @@ def plot_transition_effect_heatmap(
     return path
 
 
+def plot_effect_curve(
+    group_df: pd.DataFrame,
+    output_path: str | Path,
+    *,
+    title: str,
+    x_column: str,
+    x_label: str,
+    y_column: str = "mean_effect",
+    hue_column: str | None = None,
+    y_label: str = "Mean effect",
+    empty_title: str = "No effects available",
+) -> Path:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure, axis = plt.subplots(figsize=(8, 4))
+    if group_df.empty or x_column not in group_df.columns or y_column not in group_df.columns:
+        axis.set_title(empty_title)
+    else:
+        sort_columns = [column for column in [hue_column, x_column] if column is not None and column in group_df.columns]
+        data = group_df.sort_values(sort_columns if sort_columns else [x_column])
+        if hue_column and hue_column in data.columns:
+            iterator = data.groupby(hue_column)
+        else:
+            iterator = [("effect", data)]
+        for label, subset in iterator:
+            axis.plot(subset[x_column], subset[y_column], marker="o", label=str(label))
+        axis.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
+        axis.set_xlabel(x_label)
+        axis.set_ylabel(y_label)
+        axis.set_title(title)
+        if hue_column and hue_column in data.columns and data[hue_column].nunique() > 1:
+            axis.legend()
+    figure.tight_layout()
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+    return path
+
+
 def plot_direct_coupling_lag_curve(
     group_df: pd.DataFrame,
     output_path: str | Path,
     *,
     title: str = "Direct EEG-SEEG state coupling",
 ) -> Path:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    figure, axis = plt.subplots(figsize=(8, 4))
-    if group_df.empty:
-        axis.set_title("No direct state-coupling effects available")
-    else:
-        data = group_df.sort_values(["backend", "lag_ms"] if "backend" in group_df.columns else ["lag_ms"])
-        if "backend" in data.columns:
-            iterator = data.groupby("backend")
-        else:
-            iterator = [("direct", data)]
-        for backend, group in iterator:
-            axis.plot(group["lag_ms"], group["mean_effect"], marker="o", label=str(backend))
-        axis.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
-        axis.set_xlabel("Lag (ms)")
-        axis.set_ylabel("Mean effect")
-        axis.set_title(title)
-        if "backend" in data.columns and data["backend"].nunique() > 1:
-            axis.legend()
-    figure.tight_layout()
-    figure.savefig(path, dpi=150)
-    plt.close(figure)
-    return path
+    return plot_effect_curve(
+        group_df,
+        output_path,
+        title=title,
+        x_column="lag_ms",
+        x_label="Lag (ms)",
+        hue_column="backend" if "backend" in group_df.columns else None,
+        empty_title="No direct state-coupling effects available",
+    )
 
 
 def plot_state_transition_matrix(

@@ -1,4 +1,6 @@
 from .microstates import (
+    build_eeg_gfp_peak_table,
+    build_eeg_gfp_trace,
     fit_group_microstate_model,
     label_microstates,
     load_microstate_model,
@@ -9,6 +11,8 @@ from .montage19 import project_to_target19
 from .preprocess import preprocess_eeg_recording
 
 __all__ = [
+    "build_eeg_gfp_peak_table",
+    "build_eeg_gfp_trace",
     "fit_group_microstate_model",
     "label_microstates",
     "load_microstate_model",
