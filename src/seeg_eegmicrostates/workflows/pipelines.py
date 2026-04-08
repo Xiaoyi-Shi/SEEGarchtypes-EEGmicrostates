@@ -7,20 +7,39 @@ import pandas as pd
 from seeg_eegmicrostates._utils import config_hash, read_dataframe, write_dataframe, write_excel_dataframe
 from seeg_eegmicrostates.config import AnalysisConfig
 from seeg_eegmicrostates.coupling import (
+    DEFAULT_FINE_FIELD_LAG_WINDOW_MS,
+    DEFAULT_FIELD_STATE_NORMALIZATION,
+    DEFAULT_FIELD_STATE_PEAK_METRIC,
+    DEFAULT_FIELD_STATE_SURROGATES,
     DEFAULT_GFP_GLOBAL_METRIC,
     DEFAULT_GFP_GLOBAL_SURROGATES,
     DEFAULT_GFP_GLOBAL_WEIGHTING,
     DEFAULT_GFP_PEAK_WINDOW_SEC,
+    SUPPORTED_FIELD_STATE_NORMALIZATIONS,
+    SUPPORTED_FIELD_STATE_PEAK_METRICS,
     SUPPORTED_GFP_GLOBAL_METRICS,
     SUPPORTED_GFP_GLOBAL_WEIGHTINGS,
+    align_eeg_and_field_state_labels,
+    align_eeg_gfp_and_field_state_labels,
+    align_eeg_topography_to_archetypes,
     align_eeg_and_seeg_state_labels,
     align_gfp_and_global_traces,
     align_label_table_to_region_timeseries,
     align_microstate_to_gfp_and_global,
     align_region_timeseries_to_labels,
+    build_eeg_microstate_template_table,
+    build_eeg_topography_trace,
     build_microstate_event_table,
     build_state_transition_table,
+    compute_subject_archetype_conditioned_eeg_maps,
+    compute_subject_archetype_state_preference,
+    compute_subject_archetype_template_similarity,
+    compute_subject_field_state_coupling,
+    compute_subject_field_state_to_eeg_switching,
     connectivity_analysis_branch,
+    compute_subject_gfp_controlled_field_state_profiles,
+    compute_subject_gfp_controlled_field_state_to_eeg_switching,
+    compute_subject_gfp_controlled_field_state_transition_effects,
     compute_subject_direct_state_coupling,
     compute_subject_event_locked_connectivity_effects,
     compute_subject_event_locked_region_effects,
@@ -30,18 +49,28 @@ from seeg_eegmicrostates.coupling import (
     compute_subject_microstate_connectivity_profiles,
     compute_subject_microstate_region_profiles,
     compute_subject_peak_centered_global_trajectory,
+    derive_group_field_state_archetypes,
+    normalize_field_archetype_space,
+    compute_subject_transition_field_state_coupling,
     compute_subject_transition_state_coupling,
     compute_subject_windowed_region_coupling,
     compute_windowed_region_metrics,
     compute_windowed_state_metrics,
+    derive_seeg_field_state_artifacts,
     derive_seeg_global_metric_trace,
     derive_direct_seeg_state_artifacts,
     global_metric_label,
     normalize_connectivity_method,
     normalize_direct_state_backend,
+    normalize_field_normalization,
+    normalize_field_peak_metric,
     normalize_global_metric_definition,
     normalize_global_weighting_strategy,
+    project_field_state_templates_to_common_space,
     sample_period_from_times,
+    summarize_group_archetype_conditioned_eeg_maps,
+    summarize_group_archetype_template_similarity,
+    summarize_subject_fine_lag_profile,
 )
 from seeg_eegmicrostates.eeg import (
     build_eeg_gfp_peak_table,
@@ -52,7 +81,7 @@ from seeg_eegmicrostates.eeg import (
     save_microstate_model,
     validate_microstate_model_channels,
 )
-from seeg_eegmicrostates.io import load_atlas_table, load_workbook_tables, save_raw_fif, scan_repository
+from seeg_eegmicrostates.io import load_atlas_table, load_workbook_tables, read_raw_fif, save_raw_fif, scan_repository
 from seeg_eegmicrostates.qc import build_main_cohort
 from seeg_eegmicrostates.seeg import (
     build_same_region_bipolar_map,
@@ -74,11 +103,20 @@ from seeg_eegmicrostates.viz import (
     plot_coverage_summary,
     plot_effect_curve,
     plot_direct_coupling_lag_curve,
+    plot_eeg_topography_panels,
     plot_group_effects_heatmap,
     plot_group_metric_heatmap,
     plot_microstate_templates,
+    plot_subject_state_profile_heatmap,
+    plot_subject_template_panels,
     plot_state_transition_matrix,
     plot_transition_effect_heatmap,
+)
+from seeg_eegmicrostates.config import (
+    SEEG_PARCELLATION_COLUMN,
+    SEEG_PARCELLATION_NAME,
+    YEO17_PARCELLATION_COLUMN,
+    YEO17_PARCELLATION_NAME,
 )
 
 
@@ -102,6 +140,48 @@ _LAGGED_STATE_SUBJECT_STEM = "subject_lagged_state_coupling"
 _LAGGED_STATE_GROUP_STEM = "group_lagged_state_coupling"
 _TRANSITION_STATE_SUBJECT_STEM = "subject_transition_state_coupling"
 _TRANSITION_STATE_GROUP_STEM = "group_transition_state_coupling"
+_FIELD_STATE_TRACE_STEM = "field_state_trace"
+_FIELD_STATE_PEAK_STEM = "field_state_peaks"
+_FIELD_STATE_MAPS_STEM = "field_state_peak_maps"
+_FIELD_STATE_TEMPLATES_STEM = "field_state_templates"
+_FIELD_STATE_LABELS_STEM = "field_state_labels"
+_FIELD_STATE_PROFILES_STEM = "field_state_profiles"
+_FIELD_STATE_TRANSITION_PROFILES_STEM = "field_state_transition_profiles"
+_FIELD_ARCHETYPE_PROJECTIONS_STEM = "field_state_archetype_projections"
+_FIELD_ARCHETYPE_ASSIGNMENTS_STEM = "field_state_archetype_assignments"
+_FIELD_ARCHETYPE_TEMPLATES_STEM = "field_state_archetypes"
+_FIELD_ARCHETYPE_SUPPORT_STEM = "field_state_archetype_support"
+_FIELD_STATE_SUBJECT_STEM = "subject_field_state_coupling"
+_FIELD_STATE_GROUP_STEM = "group_field_state_coupling"
+_LAGGED_FIELD_STATE_SUBJECT_STEM = "subject_lagged_field_state_coupling"
+_LAGGED_FIELD_STATE_GROUP_STEM = "group_lagged_field_state_coupling"
+_FINE_LAG_FIELD_STATE_SUBJECT_STEM = "subject_fine_lag_field_state_coupling"
+_FINE_LAG_FIELD_STATE_GROUP_STEM = "group_fine_lag_field_state_coupling"
+_FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM = "subject_fine_lag_field_state_peaks"
+_FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM = "group_fine_lag_field_state_peak_summary"
+_TRANSITION_FIELD_STATE_SUBJECT_STEM = "subject_transition_field_state_coupling"
+_TRANSITION_FIELD_STATE_GROUP_STEM = "group_transition_field_state_coupling"
+_GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM = "subject_gfp_controlled_field_state_switching"
+_GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM = "group_gfp_controlled_field_state_switching_omnibus"
+_GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM = "group_gfp_controlled_field_state_switching_posthoc"
+_GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM = "subject_gfp_controlled_field_state_transition_switching"
+_GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM = "group_gfp_controlled_field_state_transition_switching"
+_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM = "subject_field_state_to_eeg_switching"
+_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM = "group_field_state_to_eeg_switching"
+_GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM = "subject_gfp_controlled_field_state_to_eeg_switching"
+_GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM = "group_gfp_controlled_field_state_to_eeg_switching"
+_ARCHETYPE_EEG_MAP_SUBJECT_STEM = "subject_archetype_conditioned_eeg_maps"
+_ARCHETYPE_EEG_MAP_GROUP_STEM = "group_archetype_conditioned_eeg_maps"
+_ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM = "subject_archetype_eeg_template_similarity"
+_ARCHETYPE_EEG_SIMILARITY_GROUP_STEM = "group_archetype_eeg_template_similarity"
+_ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM = "subject_archetype_eeg_state_preference"
+_ARCHETYPE_EEG_PREFERENCE_GROUP_STEM = "group_archetype_eeg_state_preference"
+_ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM = "subject_archetype_eeg_fine_lag_coupling"
+_ARCHETYPE_EEG_FINE_LAG_GROUP_STEM = "group_archetype_eeg_fine_lag_coupling"
+_ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM = "subject_archetype_eeg_fine_lag_peaks"
+_ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM = "group_archetype_eeg_fine_lag_peak_summary"
+_ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM = "subject_archetype_to_eeg_switching"
+_ARCHETYPE_EEG_TRANSITION_GROUP_STEM = "group_archetype_to_eeg_switching"
 _EEG_GFP_TRACE_STEM = "gfp_trace"
 _EEG_GFP_PEAK_STEM = "gfp_peaks"
 _SEEG_GLOBAL_TRACE_STEM = "seeg_global_trace"
@@ -125,6 +205,15 @@ _EXPLORATORY_ANALYSES = (
     "direct-state-coupling",
     "lagged-state-coupling",
     "transition-state-coupling",
+    "field-state-coupling",
+    "lagged-field-state-coupling",
+    "fine-lag-field-state-coupling",
+    "transition-field-state-coupling",
+    "field-state-to-eeg-switching",
+    "gfp-controlled-field-state-switching",
+    "field-state-archetypes",
+    "archetype-conditioned-eeg-topography",
+    "gfp-controlled-field-state-to-eeg-switching",
     "gfp-global-coupling",
     "lagged-gfp-global-coupling",
     "peak-gfp-global-coupling",
@@ -166,6 +255,48 @@ def _direct_state_artifact_branch(
             "backend": normalize_direct_state_backend(backend),
             "state_count": int(state_count),
             "components": int(components),
+        },
+    )
+
+
+def _field_state_artifact_branch(
+    cfg: AnalysisConfig,
+    *,
+    peak_metric: str,
+    normalization: str,
+    state_count: int,
+    min_duration_ms: int,
+) -> str:
+    return _exploratory_branch(
+        cfg,
+        "field-state-shared",
+        params={
+            "peak_metric": normalize_field_peak_metric(peak_metric),
+            "normalization": normalize_field_normalization(normalization),
+            "state_count": int(state_count),
+            "min_duration_ms": int(min_duration_ms),
+        },
+    )
+
+
+def _field_state_archetype_artifact_branch(
+    cfg: AnalysisConfig,
+    *,
+    peak_metric: str,
+    normalization: str,
+    state_count: int,
+    min_duration_ms: int,
+    comparison_space: str,
+) -> str:
+    return _exploratory_branch(
+        cfg,
+        "field-state-archetype-shared",
+        params={
+            "peak_metric": normalize_field_peak_metric(peak_metric),
+            "normalization": normalize_field_normalization(normalization),
+            "state_count": int(state_count),
+            "min_duration_ms": int(min_duration_ms),
+            "comparison_space": normalize_field_archetype_space(comparison_space),
         },
     )
 
@@ -224,6 +355,26 @@ def _resolve_direct_components(components: int | None, cfg: AnalysisConfig) -> i
 
 def _resolve_direct_surrogates(surrogates: int | None, cfg: AnalysisConfig) -> int:
     return max(1, int(surrogates if surrogates is not None else cfg.direct_state_surrogates))
+
+
+def _resolve_field_state_count(state_count: int | None, cfg: AnalysisConfig) -> int:
+    return max(1, int(state_count if state_count is not None else cfg.microstate_k))
+
+
+def _resolve_field_min_duration_ms(min_duration_ms: int | None, cfg: AnalysisConfig) -> int:
+    return max(1, int(min_duration_ms if min_duration_ms is not None else cfg.min_microstate_duration_ms))
+
+
+def _resolve_field_surrogates(surrogates: int | None) -> int:
+    return max(1, int(surrogates if surrogates is not None else DEFAULT_FIELD_STATE_SURROGATES))
+
+
+def _resolve_field_archetype_space(comparison_space: str | None) -> str:
+    return normalize_field_archetype_space(comparison_space or YEO17_PARCELLATION_NAME)
+
+
+def _resolve_fine_field_lag_window_ms(window_ms: int | None) -> int:
+    return max(4, int(window_ms if window_ms is not None else DEFAULT_FINE_FIELD_LAG_WINDOW_MS))
 
 
 def _resolve_transition_window_sec(window_sec: float | None, cfg: AnalysisConfig) -> float:
@@ -374,6 +525,170 @@ def _ensure_direct_state_artifacts(
     }
 
 
+def _ensure_seeg_field_state_artifacts(
+    cfg: AnalysisConfig,
+    *,
+    peak_metric: str,
+    normalization: str,
+    state_count: int,
+    min_duration_ms: int,
+) -> tuple[str, dict[str, Path]]:
+    normalized_metric = normalize_field_peak_metric(peak_metric)
+    normalized_strategy = normalize_field_normalization(normalization)
+    field_branch = _field_state_artifact_branch(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    cached = {
+        "trace": cfg.cache_path("coupling", _FIELD_STATE_TRACE_STEM, ext="parquet", branch=field_branch),
+        "peaks": cfg.cache_path("coupling", _FIELD_STATE_PEAK_STEM, ext="parquet", branch=field_branch),
+        "peak_maps": cfg.cache_path("coupling", _FIELD_STATE_MAPS_STEM, ext="parquet", branch=field_branch),
+        "templates": cfg.cache_path("coupling", _FIELD_STATE_TEMPLATES_STEM, ext="parquet", branch=field_branch),
+        "labels": cfg.cache_path("coupling", _FIELD_STATE_LABELS_STEM, ext="parquet", branch=field_branch),
+        "profiles": cfg.cache_path("coupling", _FIELD_STATE_PROFILES_STEM, ext="parquet", branch=field_branch),
+        "transition_profiles": cfg.cache_path("coupling", _FIELD_STATE_TRANSITION_PROFILES_STEM, ext="parquet", branch=field_branch),
+    }
+    if _all_exist(cached):
+        return field_branch, cached
+    cohort = _eligible_rows(cfg)
+    trace_frames: list[pd.DataFrame] = []
+    peak_frames: list[pd.DataFrame] = []
+    peak_map_frames: list[pd.DataFrame] = []
+    template_frames: list[pd.DataFrame] = []
+    label_frames: list[pd.DataFrame] = []
+    profile_frames: list[pd.DataFrame] = []
+    transition_profile_frames: list[pd.DataFrame] = []
+    for offset, row in enumerate(cohort.to_dict(orient="records")):
+        patient_id = str(row["patient_id"])
+        raw_bp = load_and_crop_bipolar_seeg(row["seeg_bipolar_path"], float(row["start_sec"]), float(row["end_sec"]))
+        band = raw_bp.copy()
+        band.filter(cfg.band_limited_range[0], cfg.band_limited_range[1], verbose="ERROR")
+        band.resample(cfg.seeg_resample_hz, verbose="ERROR")
+        channel_df = pd.DataFrame(band.get_data().T, columns=band.ch_names)
+        channel_df.insert(0, "time_sec", band.times.astype(float))
+        artifacts = derive_seeg_field_state_artifacts(
+            channel_df,
+            patient_id=patient_id,
+            peak_metric=normalized_metric,
+            normalization=normalized_strategy,
+            n_states=state_count,
+            min_duration_ms=min_duration_ms,
+            min_peak_distance_ms=cfg.gfp_min_peak_distance_ms,
+            seed=cfg.random_seed + offset,
+        )
+        trace_frames.append(artifacts["trace"])
+        peak_frames.append(artifacts["peaks"])
+        peak_map_frames.append(artifacts["peak_maps"])
+        template_frames.append(artifacts["templates"])
+        label_frames.append(artifacts["labels"])
+        profile_frames.append(artifacts["profiles"])
+        transition_profile_frames.append(artifacts["transition_profiles"])
+    trace_df = pd.concat(trace_frames, ignore_index=True) if trace_frames else pd.DataFrame()
+    peak_df = pd.concat(peak_frames, ignore_index=True) if peak_frames else pd.DataFrame()
+    peak_maps_df = pd.concat(peak_map_frames, ignore_index=True) if peak_map_frames else pd.DataFrame()
+    template_df = pd.concat(template_frames, ignore_index=True) if template_frames else pd.DataFrame()
+    label_df = pd.concat(label_frames, ignore_index=True) if label_frames else pd.DataFrame()
+    profile_df = pd.concat(profile_frames, ignore_index=True) if profile_frames else pd.DataFrame()
+    transition_profile_df = (
+        pd.concat(transition_profile_frames, ignore_index=True) if transition_profile_frames else pd.DataFrame()
+    )
+    return field_branch, {
+        "trace": write_dataframe(trace_df, cached["trace"]),
+        "peaks": write_dataframe(peak_df, cached["peaks"]),
+        "peak_maps": write_dataframe(peak_maps_df, cached["peak_maps"]),
+        "templates": write_dataframe(template_df, cached["templates"]),
+        "labels": write_dataframe(label_df, cached["labels"]),
+        "profiles": write_dataframe(profile_df, cached["profiles"]),
+        "transition_profiles": write_dataframe(transition_profile_df, cached["transition_profiles"]),
+    }
+
+
+def _field_archetype_space_config(comparison_space: str) -> tuple[str, str]:
+    normalized_space = normalize_field_archetype_space(comparison_space)
+    if normalized_space == YEO17_PARCELLATION_NAME:
+        return YEO17_PARCELLATION_NAME, YEO17_PARCELLATION_COLUMN
+    return SEEG_PARCELLATION_NAME, SEEG_PARCELLATION_COLUMN
+
+
+def _ensure_seeg_field_state_archetype_artifacts(
+    cfg: AnalysisConfig,
+    *,
+    peak_metric: str,
+    normalization: str,
+    state_count: int,
+    min_duration_ms: int,
+    comparison_space: str,
+) -> tuple[str, dict[str, Path]]:
+    normalized_space = _resolve_field_archetype_space(comparison_space)
+    artifact_branch = _field_state_archetype_artifact_branch(
+        cfg,
+        peak_metric=peak_metric,
+        normalization=normalization,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+        comparison_space=normalized_space,
+    )
+    cached = {
+        "projections": cfg.cache_path("coupling", _FIELD_ARCHETYPE_PROJECTIONS_STEM, ext="parquet", branch=artifact_branch),
+    }
+    if _all_exist(cached):
+        return artifact_branch, cached
+    _, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=peak_metric,
+        normalization=normalization,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    template_df = read_dataframe(state_paths["templates"])
+    if template_df.empty:
+        return artifact_branch, {"projections": write_dataframe(pd.DataFrame(), cached["projections"])}
+    cohort = _eligible_rows(cfg)
+    parcellation_name, atlas_column = _field_archetype_space_config(normalized_space)
+    projection_frames: list[pd.DataFrame] = []
+    for row in cohort.to_dict(orient="records"):
+        patient_id = str(row["patient_id"])
+        patient_templates = template_df[template_df["patient_id"] == patient_id]
+        if patient_templates.empty:
+            continue
+        template_columns = [
+            column
+            for column in patient_templates.columns
+            if column
+            not in {
+                "patient_id",
+                "field_state",
+                "peak_metric",
+                "normalization",
+                "n_states",
+                "min_duration_ms",
+                "n_channels",
+                "n_peak_maps",
+            }
+        ]
+        atlas_df = load_atlas_table(row["atlas_path"])
+        mapping_df = build_same_region_bipolar_map(
+            atlas_df,
+            template_columns,
+            patient_id=patient_id,
+            atlas_column=atlas_column,
+            parcellation_name=parcellation_name,
+        )
+        projection_frames.append(
+            project_field_state_templates_to_common_space(
+                patient_templates,
+                mapping_df,
+                patient_id=patient_id,
+                comparison_space=normalized_space,
+            )
+        )
+    projection_df = pd.concat(projection_frames, ignore_index=True) if projection_frames else pd.DataFrame()
+    return artifact_branch, {"projections": write_dataframe(projection_df, cached["projections"])}
+
+
 def _require_yeo17_global_branch(cfg: AnalysisConfig) -> None:
     if cfg.seeg_parcellation_name != "yeo17":
         raise ValueError(
@@ -507,6 +822,26 @@ def run_eeg_microstate_branch(
 
 def run_eeg_states_stage(cfg: AnalysisConfig, *, template_fif: str | Path | None = None) -> dict[str, Path]:
     return run_eeg_microstate_branch(cfg, template_fif=template_fif)
+
+
+def _patient_preprocessed_eeg_path(cfg: AnalysisConfig, *, patient_id: str, branch: str = _BAND_BRANCH) -> Path:
+    return cfg.cache_path("eeg", "preprocessed", ext="fif", branch=branch, patient_id=patient_id)
+
+
+def _load_patient_eeg_topography_trace(cfg: AnalysisConfig, cohort_row: dict[str, object], *, patient_id: str) -> pd.DataFrame:
+    path = _patient_preprocessed_eeg_path(cfg, patient_id=patient_id)
+    if path.exists():
+        raw19 = read_raw_fif(path, preload=True)
+    else:
+        raw19, _ = preprocess_eeg_recording(
+            cohort_row["eeg_ref_path"],
+            start_sec=float(cohort_row["start_sec"]),
+            end_sec=float(cohort_row["end_sec"]),
+            cfg=cfg,
+            band=cfg.band_limited_range,
+        )
+        save_raw_fif(raw19, path)
+    return build_eeg_topography_trace(raw19, patient_id=patient_id)
 
 
 def run_seeg_band_limited_region_branch(cfg: AnalysisConfig) -> dict[str, Path]:
@@ -1248,6 +1583,1474 @@ def run_exploratory_transition_state_coupling_stage(
     }
 
 
+def run_exploratory_field_state_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    field_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    surrogates = _resolve_field_surrogates(field_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "field-state-coupling",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _FIELD_STATE_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _FIELD_STATE_SUBJECT_STEM: cached["subject_effects"],
+                _FIELD_STATE_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            **cached,
+            "subject_effects_excel": tables[_FIELD_STATE_SUBJECT_STEM],
+            "group_effects_excel": tables[_FIELD_STATE_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    field_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_eeg_and_field_state_labels(
+            eeg_labels[eeg_labels["patient_id"] == patient_id],
+            field_labels[field_labels["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_field_state_coupling(
+                aligned,
+                patient_id=patient_id,
+                lag_samples=[0],
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _FIELD_STATE_SUBJECT_STEM: subject_effects,
+            _FIELD_STATE_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_FIELD_STATE_SUBJECT_STEM],
+        "group_effects_excel": tables[_FIELD_STATE_GROUP_STEM],
+    }
+
+
+def run_exploratory_lagged_field_state_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    max_lag_ms: int | None = None,
+    lag_step_ms: int | None = None,
+    field_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    surrogates = _resolve_field_surrogates(field_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "lagged-field-state-coupling",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "max_lag_ms": int(max_lag_ms if max_lag_ms is not None else cfg.direct_max_lag_ms),
+            "lag_step_ms": int(lag_step_ms if lag_step_ms is not None else cfg.direct_lag_step_ms),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _LAGGED_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _LAGGED_FIELD_STATE_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _LAGGED_FIELD_STATE_SUBJECT_STEM: cached["subject_effects"],
+                _LAGGED_FIELD_STATE_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            **cached,
+            "subject_effects_excel": tables[_LAGGED_FIELD_STATE_SUBJECT_STEM],
+            "group_effects_excel": tables[_LAGGED_FIELD_STATE_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    field_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_eeg_and_field_state_labels(
+            eeg_labels[eeg_labels["patient_id"] == patient_id],
+            field_labels[field_labels["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_field_state_coupling(
+                aligned,
+                patient_id=patient_id,
+                lag_samples=_resolve_direct_lag_grid(
+                    cfg,
+                    sample_period_sec=sample_period,
+                    max_lag_ms=max_lag_ms,
+                    lag_step_ms=lag_step_ms,
+                ),
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _LAGGED_FIELD_STATE_SUBJECT_STEM: subject_effects,
+            _LAGGED_FIELD_STATE_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_LAGGED_FIELD_STATE_SUBJECT_STEM],
+        "group_effects_excel": tables[_LAGGED_FIELD_STATE_GROUP_STEM],
+    }
+
+
+def run_exploratory_field_state_archetypes_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    field_archetype_space: str = YEO17_PARCELLATION_NAME,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    comparison_space = _resolve_field_archetype_space(field_archetype_space)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    artifact_branch, artifact_paths = _ensure_seeg_field_state_archetype_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+        comparison_space=comparison_space,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "field-state-archetypes",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "comparison_space": comparison_space,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "assignments": cfg.cache_path("coupling", _FIELD_ARCHETYPE_ASSIGNMENTS_STEM, ext="parquet", branch=branch),
+        "archetypes": cfg.cache_path("coupling", _FIELD_ARCHETYPE_TEMPLATES_STEM, ext="parquet", branch=branch),
+        "support": cfg.cache_path("stats", _FIELD_ARCHETYPE_SUPPORT_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _FIELD_ARCHETYPE_PROJECTIONS_STEM: artifact_paths["projections"],
+                _FIELD_ARCHETYPE_ASSIGNMENTS_STEM: cached["assignments"],
+                _FIELD_ARCHETYPE_TEMPLATES_STEM: cached["archetypes"],
+                _FIELD_ARCHETYPE_SUPPORT_STEM: cached["support"],
+            },
+            branch=branch,
+        )
+        return {
+            "subject_projections": artifact_paths["projections"],
+            **cached,
+            "subject_projections_excel": tables[_FIELD_ARCHETYPE_PROJECTIONS_STEM],
+            "assignments_excel": tables[_FIELD_ARCHETYPE_ASSIGNMENTS_STEM],
+            "archetypes_excel": tables[_FIELD_ARCHETYPE_TEMPLATES_STEM],
+            "support_excel": tables[_FIELD_ARCHETYPE_SUPPORT_STEM],
+        }
+    projection_df = read_dataframe(artifact_paths["projections"])
+    summaries = derive_group_field_state_archetypes(
+        projection_df,
+        comparison_space=comparison_space,
+        n_states=state_count,
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    assignment_path = write_dataframe(summaries["assignments"], cached["assignments"])
+    archetype_path = write_dataframe(summaries["archetypes"], cached["archetypes"])
+    support_path = write_dataframe(summaries["support"], cached["support"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _FIELD_ARCHETYPE_PROJECTIONS_STEM: projection_df,
+            _FIELD_ARCHETYPE_ASSIGNMENTS_STEM: summaries["assignments"],
+            _FIELD_ARCHETYPE_TEMPLATES_STEM: summaries["archetypes"],
+            _FIELD_ARCHETYPE_SUPPORT_STEM: summaries["support"],
+        },
+        branch=branch,
+    )
+    return {
+        "subject_projections": artifact_paths["projections"],
+        "assignments": assignment_path,
+        "archetypes": archetype_path,
+        "support": support_path,
+        "subject_projections_excel": tables[_FIELD_ARCHETYPE_PROJECTIONS_STEM],
+        "assignments_excel": tables[_FIELD_ARCHETYPE_ASSIGNMENTS_STEM],
+        "archetypes_excel": tables[_FIELD_ARCHETYPE_TEMPLATES_STEM],
+        "support_excel": tables[_FIELD_ARCHETYPE_SUPPORT_STEM],
+    }
+
+
+def run_exploratory_archetype_conditioned_eeg_topography_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    field_archetype_space: str = YEO17_PARCELLATION_NAME,
+    fine_lag_window_ms: int | None = None,
+    transition_window_sec: float | None = None,
+    field_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    comparison_space = _resolve_field_archetype_space(field_archetype_space)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    window_ms = _resolve_fine_field_lag_window_ms(fine_lag_window_ms)
+    window_sec = _resolve_transition_window_sec(transition_window_sec, cfg)
+    surrogates = _resolve_field_surrogates(field_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    archetype_outputs = run_exploratory_field_state_archetypes_stage(
+        cfg,
+        field_peak_metric=normalized_metric,
+        field_normalization=normalized_strategy,
+        field_state_count=state_count,
+        field_min_duration_ms=min_duration_ms,
+        field_archetype_space=comparison_space,
+        min_subjects=threshold,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "archetype-conditioned-eeg-topography",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "comparison_space": comparison_space,
+            "fine_lag_window_ms": window_ms,
+            "transition_window_sec": float(window_sec),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_maps": cfg.cache_path("coupling", _ARCHETYPE_EEG_MAP_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_maps": cfg.cache_path("coupling", _ARCHETYPE_EEG_MAP_GROUP_STEM, ext="parquet", branch=branch),
+        "subject_similarity": cfg.cache_path("coupling", _ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_similarity": cfg.cache_path("stats", _ARCHETYPE_EEG_SIMILARITY_GROUP_STEM, ext="parquet", branch=branch),
+        "subject_preference": cfg.cache_path("coupling", _ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_preference": cfg.cache_path("stats", _ARCHETYPE_EEG_PREFERENCE_GROUP_STEM, ext="parquet", branch=branch),
+        "subject_fine_lag": cfg.cache_path("coupling", _ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_fine_lag": cfg.cache_path("stats", _ARCHETYPE_EEG_FINE_LAG_GROUP_STEM, ext="parquet", branch=branch),
+        "subject_fine_lag_peaks": cfg.cache_path(
+            "coupling", _ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM, ext="parquet", branch=branch
+        ),
+        "group_fine_lag_peak_summary": cfg.cache_path(
+            "stats", _ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM, ext="parquet", branch=branch
+        ),
+        "subject_transition_effects": cfg.cache_path(
+            "coupling", _ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM, ext="parquet", branch=branch
+        ),
+        "group_transition_effects": cfg.cache_path(
+            "stats", _ARCHETYPE_EEG_TRANSITION_GROUP_STEM, ext="parquet", branch=branch
+        ),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _ARCHETYPE_EEG_MAP_SUBJECT_STEM: cached["subject_maps"],
+                _ARCHETYPE_EEG_MAP_GROUP_STEM: cached["group_maps"],
+                _ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM: cached["subject_similarity"],
+                _ARCHETYPE_EEG_SIMILARITY_GROUP_STEM: cached["group_similarity"],
+                _ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM: cached["subject_preference"],
+                _ARCHETYPE_EEG_PREFERENCE_GROUP_STEM: cached["group_preference"],
+                _ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM: cached["subject_fine_lag"],
+                _ARCHETYPE_EEG_FINE_LAG_GROUP_STEM: cached["group_fine_lag"],
+                _ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM: cached["subject_fine_lag_peaks"],
+                _ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM: cached["group_fine_lag_peak_summary"],
+                _ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM: cached["subject_transition_effects"],
+                _ARCHETYPE_EEG_TRANSITION_GROUP_STEM: cached["group_transition_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            "archetype_assignments": archetype_outputs["assignments"],
+            "archetypes": archetype_outputs["archetypes"],
+            "archetype_support": archetype_outputs["support"],
+            **cached,
+            "subject_maps_excel": tables[_ARCHETYPE_EEG_MAP_SUBJECT_STEM],
+            "group_maps_excel": tables[_ARCHETYPE_EEG_MAP_GROUP_STEM],
+            "subject_similarity_excel": tables[_ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM],
+            "group_similarity_excel": tables[_ARCHETYPE_EEG_SIMILARITY_GROUP_STEM],
+            "subject_preference_excel": tables[_ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM],
+            "group_preference_excel": tables[_ARCHETYPE_EEG_PREFERENCE_GROUP_STEM],
+            "subject_fine_lag_excel": tables[_ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM],
+            "group_fine_lag_excel": tables[_ARCHETYPE_EEG_FINE_LAG_GROUP_STEM],
+            "subject_fine_lag_peaks_excel": tables[_ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM],
+            "group_fine_lag_peak_summary_excel": tables[_ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM],
+            "subject_transition_effects_excel": tables[_ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM],
+            "group_transition_effects_excel": tables[_ARCHETYPE_EEG_TRANSITION_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    eeg_templates = build_eeg_microstate_template_table(load_microstate_model(eeg_outputs["model"]))
+    field_labels = read_dataframe(state_paths["labels"])
+    assignment_df = read_dataframe(archetype_outputs["assignments"])
+    archetype_df = read_dataframe(archetype_outputs["archetypes"])
+    valid_archetypes = (
+        set(archetype_df["field_state"].astype(int).tolist())
+        if not archetype_df.empty and "field_state" in archetype_df.columns
+        else set()
+    )
+    if valid_archetypes:
+        assignment_df = assignment_df[assignment_df["assigned_archetype"].astype(int).isin(valid_archetypes)].copy()
+    else:
+        assignment_df = assignment_df.iloc[0:0].copy()
+    subject_map_frames: list[pd.DataFrame] = []
+    subject_similarity_frames: list[pd.DataFrame] = []
+    subject_preference_frames: list[pd.DataFrame] = []
+    subject_fine_lag_frames: list[pd.DataFrame] = []
+    subject_fine_lag_peak_frames: list[pd.DataFrame] = []
+    subject_transition_frames: list[pd.DataFrame] = []
+    for offset, row in enumerate(_eligible_rows(cfg).to_dict(orient="records")):
+        patient_id = str(row["patient_id"])
+        patient_eeg_labels = eeg_labels[eeg_labels["patient_id"] == patient_id].copy()
+        patient_field_labels = field_labels[field_labels["patient_id"] == patient_id].copy()
+        patient_assignments = assignment_df[assignment_df["patient_id"].astype(str) == patient_id].copy()
+        if patient_eeg_labels.empty or patient_field_labels.empty or patient_assignments.empty:
+            continue
+        eeg_topography = _load_patient_eeg_topography_trace(cfg, row, patient_id=patient_id)
+        aligned = align_eeg_topography_to_archetypes(
+            eeg_topography,
+            patient_eeg_labels,
+            patient_field_labels,
+            patient_assignments,
+            patient_id=patient_id,
+        )
+        if aligned.empty:
+            continue
+        subject_maps = compute_subject_archetype_conditioned_eeg_maps(aligned, patient_id=patient_id)
+        if not subject_maps.empty:
+            subject_map_frames.append(subject_maps)
+            subject_similarity_frames.append(
+                compute_subject_archetype_template_similarity(subject_maps, eeg_templates, patient_id=patient_id)
+            )
+        subject_preference_frames.append(compute_subject_archetype_state_preference(aligned, patient_id=patient_id))
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float))
+        if sample_period > 0.0:
+            lag_window_samples = max(1, int(round(window_ms / (sample_period * 1000.0))))
+            lag_samples = list(range(-lag_window_samples, lag_window_samples + 1))
+            coupling_input = aligned.drop(columns=["field_state"]).rename(columns={"assigned_archetype": "field_state"})
+            subject_curve = compute_subject_field_state_coupling(
+                coupling_input,
+                patient_id=patient_id,
+                lag_samples=lag_samples,
+                sample_period_sec=sample_period,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+            if not subject_curve.empty:
+                subject_curve["comparison_space"] = comparison_space
+                subject_fine_lag_frames.append(subject_curve)
+                subject_peak = summarize_subject_fine_lag_profile(subject_curve, patient_id=patient_id)
+                subject_peak["comparison_space"] = comparison_space
+                subject_fine_lag_peak_frames.append(subject_peak)
+        archetype_label_df = patient_field_labels.merge(
+            patient_assignments[
+                ["patient_id", "field_state", "assigned_archetype", "comparison_space"]
+            ].copy(),
+            on=["patient_id", "field_state"],
+            how="inner",
+        )
+        if not archetype_label_df.empty:
+            transition_input = archetype_label_df.copy()
+            transition_input["field_state"] = transition_input["assigned_archetype"].astype(int)
+            transition_effects = compute_subject_field_state_to_eeg_switching(
+                transition_input[
+                    [
+                        "time_sec",
+                        "field_state",
+                        "peak_metric",
+                        "normalization",
+                        "n_states",
+                        "min_duration_ms",
+                    ]
+                ],
+                patient_eeg_labels,
+                patient_id=patient_id,
+                window_sec=window_sec,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+            if not transition_effects.empty:
+                transition_effects["comparison_space"] = comparison_space
+                subject_transition_frames.append(transition_effects)
+    subject_maps_df = pd.concat(subject_map_frames, ignore_index=True) if subject_map_frames else pd.DataFrame()
+    group_maps_df = summarize_group_archetype_conditioned_eeg_maps(subject_maps_df, min_subjects=threshold)
+    subject_similarity_df = (
+        pd.concat(subject_similarity_frames, ignore_index=True) if subject_similarity_frames else pd.DataFrame()
+    )
+    group_similarity_df = summarize_group_archetype_template_similarity(subject_similarity_df, min_subjects=threshold)
+    subject_preference_df = (
+        pd.concat(subject_preference_frames, ignore_index=True) if subject_preference_frames else pd.DataFrame()
+    )
+    group_preference_df = run_group_scalar_statistics(
+        subject_preference_df,
+        group_keys=[
+            "comparison_space",
+            "peak_metric",
+            "normalization",
+            "n_states",
+            "min_duration_ms",
+            "assigned_archetype",
+            "microstate",
+        ],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    if not group_preference_df.empty and not subject_preference_df.empty:
+        probability_summary = (
+            subject_preference_df.groupby(
+                [
+                    "comparison_space",
+                    "peak_metric",
+                    "normalization",
+                    "n_states",
+                    "min_duration_ms",
+                    "assigned_archetype",
+                    "microstate",
+                ],
+                as_index=False,
+            )
+            .agg(
+                mean_conditional_probability=("conditional_probability", "mean"),
+                mean_baseline_probability=("baseline_probability", "mean"),
+                mean_joint_samples=("joint_samples", "mean"),
+                mean_state_samples=("n_samples", "mean"),
+            )
+        )
+        group_preference_df = group_preference_df.merge(
+            probability_summary,
+            on=[
+                "comparison_space",
+                "peak_metric",
+                "normalization",
+                "n_states",
+                "min_duration_ms",
+                "assigned_archetype",
+                "microstate",
+            ],
+            how="left",
+        )
+    subject_fine_lag_df = pd.concat(subject_fine_lag_frames, ignore_index=True) if subject_fine_lag_frames else pd.DataFrame()
+    group_fine_lag_df = run_group_scalar_statistics(
+        subject_fine_lag_df,
+        group_keys=["comparison_space", "peak_metric", "normalization", "n_states", "min_duration_ms", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    if not group_fine_lag_df.empty and not subject_fine_lag_df.empty:
+        lag_summary = (
+            subject_fine_lag_df.groupby(
+                ["comparison_space", "peak_metric", "normalization", "n_states", "min_duration_ms", "lag_ms"],
+                as_index=False,
+            )
+            .agg(
+                mean_observed_coupling=("observed_coupling", "mean"),
+                mean_null_mean_coupling=("null_mean_coupling", "mean"),
+            )
+        )
+        group_fine_lag_df = group_fine_lag_df.merge(
+            lag_summary,
+            on=["comparison_space", "peak_metric", "normalization", "n_states", "min_duration_ms", "lag_ms"],
+            how="left",
+        )
+    subject_fine_lag_peak_df = (
+        pd.concat(subject_fine_lag_peak_frames, ignore_index=True) if subject_fine_lag_peak_frames else pd.DataFrame()
+    )
+    peak_long = (
+        subject_fine_lag_peak_df.melt(
+            id_vars=["patient_id", "comparison_space", "peak_metric", "normalization", "n_states", "min_duration_ms"],
+            value_vars=["peak_lag_ms", "peak_effect_mean_diff", "peak_width_ms"],
+            var_name="summary_kind",
+            value_name="summary_value",
+        )
+        if not subject_fine_lag_peak_df.empty
+        else pd.DataFrame(
+            columns=[
+                "patient_id",
+                "comparison_space",
+                "peak_metric",
+                "normalization",
+                "n_states",
+                "min_duration_ms",
+                "summary_kind",
+                "summary_value",
+            ]
+        )
+    )
+    group_fine_lag_peak_df = run_group_scalar_statistics(
+        peak_long,
+        group_keys=["comparison_space", "peak_metric", "normalization", "n_states", "min_duration_ms", "summary_kind"],
+        value_column="summary_value",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    subject_transition_df = (
+        pd.concat(subject_transition_frames, ignore_index=True) if subject_transition_frames else pd.DataFrame()
+    )
+    group_transition_df = run_group_scalar_statistics(
+        subject_transition_df,
+        group_keys=[
+            "comparison_space",
+            "peak_metric",
+            "normalization",
+            "n_states",
+            "min_duration_ms",
+            "from_state",
+            "to_state",
+            "response_kind",
+            "response_state",
+        ],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    subject_map_path = write_dataframe(subject_maps_df, cached["subject_maps"])
+    group_map_path = write_dataframe(group_maps_df, cached["group_maps"])
+    subject_similarity_path = write_dataframe(subject_similarity_df, cached["subject_similarity"])
+    group_similarity_path = write_dataframe(group_similarity_df, cached["group_similarity"])
+    subject_preference_path = write_dataframe(subject_preference_df, cached["subject_preference"])
+    group_preference_path = write_dataframe(group_preference_df, cached["group_preference"])
+    subject_fine_lag_path = write_dataframe(subject_fine_lag_df, cached["subject_fine_lag"])
+    group_fine_lag_path = write_dataframe(group_fine_lag_df, cached["group_fine_lag"])
+    subject_fine_lag_peak_path = write_dataframe(subject_fine_lag_peak_df, cached["subject_fine_lag_peaks"])
+    group_fine_lag_peak_path = write_dataframe(group_fine_lag_peak_df, cached["group_fine_lag_peak_summary"])
+    subject_transition_path = write_dataframe(subject_transition_df, cached["subject_transition_effects"])
+    group_transition_path = write_dataframe(group_transition_df, cached["group_transition_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _ARCHETYPE_EEG_MAP_SUBJECT_STEM: subject_maps_df,
+            _ARCHETYPE_EEG_MAP_GROUP_STEM: group_maps_df,
+            _ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM: subject_similarity_df,
+            _ARCHETYPE_EEG_SIMILARITY_GROUP_STEM: group_similarity_df,
+            _ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM: subject_preference_df,
+            _ARCHETYPE_EEG_PREFERENCE_GROUP_STEM: group_preference_df,
+            _ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM: subject_fine_lag_df,
+            _ARCHETYPE_EEG_FINE_LAG_GROUP_STEM: group_fine_lag_df,
+            _ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM: subject_fine_lag_peak_df,
+            _ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM: group_fine_lag_peak_df,
+            _ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM: subject_transition_df,
+            _ARCHETYPE_EEG_TRANSITION_GROUP_STEM: group_transition_df,
+        },
+        branch=branch,
+    )
+    return {
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "archetype_assignments": archetype_outputs["assignments"],
+        "archetypes": archetype_outputs["archetypes"],
+        "archetype_support": archetype_outputs["support"],
+        "subject_maps": subject_map_path,
+        "group_maps": group_map_path,
+        "subject_similarity": subject_similarity_path,
+        "group_similarity": group_similarity_path,
+        "subject_preference": subject_preference_path,
+        "group_preference": group_preference_path,
+        "subject_fine_lag": subject_fine_lag_path,
+        "group_fine_lag": group_fine_lag_path,
+        "subject_fine_lag_peaks": subject_fine_lag_peak_path,
+        "group_fine_lag_peak_summary": group_fine_lag_peak_path,
+        "subject_transition_effects": subject_transition_path,
+        "group_transition_effects": group_transition_path,
+        "subject_maps_excel": tables[_ARCHETYPE_EEG_MAP_SUBJECT_STEM],
+        "group_maps_excel": tables[_ARCHETYPE_EEG_MAP_GROUP_STEM],
+        "subject_similarity_excel": tables[_ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM],
+        "group_similarity_excel": tables[_ARCHETYPE_EEG_SIMILARITY_GROUP_STEM],
+        "subject_preference_excel": tables[_ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM],
+        "group_preference_excel": tables[_ARCHETYPE_EEG_PREFERENCE_GROUP_STEM],
+        "subject_fine_lag_excel": tables[_ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM],
+        "group_fine_lag_excel": tables[_ARCHETYPE_EEG_FINE_LAG_GROUP_STEM],
+        "subject_fine_lag_peaks_excel": tables[_ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM],
+        "group_fine_lag_peak_summary_excel": tables[_ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM],
+        "subject_transition_effects_excel": tables[_ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM],
+        "group_transition_effects_excel": tables[_ARCHETYPE_EEG_TRANSITION_GROUP_STEM],
+    }
+
+
+def run_exploratory_fine_lag_field_state_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    fine_lag_window_ms: int | None = None,
+    field_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    window_ms = _resolve_fine_field_lag_window_ms(fine_lag_window_ms)
+    surrogates = _resolve_field_surrogates(field_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "fine-lag-field-state-coupling",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "fine_lag_window_ms": window_ms,
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _FINE_LAG_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _FINE_LAG_FIELD_STATE_GROUP_STEM, ext="parquet", branch=branch),
+        "subject_peaks": cfg.cache_path("coupling", _FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_peak_summary": cfg.cache_path("stats", _FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _FINE_LAG_FIELD_STATE_SUBJECT_STEM: cached["subject_effects"],
+                _FINE_LAG_FIELD_STATE_GROUP_STEM: cached["group_effects"],
+                _FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM: cached["subject_peaks"],
+                _FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM: cached["group_peak_summary"],
+            },
+            branch=branch,
+        )
+        return {
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            **cached,
+            "subject_effects_excel": tables[_FINE_LAG_FIELD_STATE_SUBJECT_STEM],
+            "group_effects_excel": tables[_FINE_LAG_FIELD_STATE_GROUP_STEM],
+            "subject_peaks_excel": tables[_FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM],
+            "group_peak_summary_excel": tables[_FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    field_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    subject_peak_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        aligned = align_eeg_and_field_state_labels(
+            eeg_labels[eeg_labels["patient_id"] == patient_id],
+            field_labels[field_labels["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        if sample_period <= 0.0:
+            continue
+        lag_window_samples = max(1, int(round(window_ms / (sample_period * 1000.0))))
+        lag_samples = list(range(-lag_window_samples, lag_window_samples + 1))
+        subject_curve = compute_subject_field_state_coupling(
+            aligned,
+            patient_id=patient_id,
+            lag_samples=lag_samples,
+            sample_period_sec=sample_period,
+            n_surrogates=surrogates,
+            seed=cfg.random_seed + offset,
+        )
+        subject_frames.append(subject_curve)
+        subject_peak_frames.append(summarize_subject_fine_lag_profile(subject_curve, patient_id=patient_id))
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_peaks = pd.concat(subject_peak_frames, ignore_index=True) if subject_peak_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms", "lag_ms"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    subject_peak_path = write_dataframe(subject_peaks, cached["subject_peaks"])
+    peak_long = (
+        subject_peaks.melt(
+            id_vars=["patient_id", "peak_metric", "normalization", "n_states", "min_duration_ms"],
+            value_vars=["peak_lag_ms", "peak_effect_mean_diff", "peak_width_ms"],
+            var_name="summary_kind",
+            value_name="summary_value",
+        )
+        if not subject_peaks.empty
+        else pd.DataFrame(
+            columns=[
+                "patient_id",
+                "peak_metric",
+                "normalization",
+                "n_states",
+                "min_duration_ms",
+                "summary_kind",
+                "summary_value",
+            ]
+        )
+    )
+    group_peak_summary = run_group_scalar_statistics(
+        peak_long,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms", "summary_kind"],
+        value_column="summary_value",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_peak_path = write_dataframe(group_peak_summary, cached["group_peak_summary"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _FINE_LAG_FIELD_STATE_SUBJECT_STEM: subject_effects,
+            _FINE_LAG_FIELD_STATE_GROUP_STEM: group_effects,
+            _FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM: subject_peaks,
+            _FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM: group_peak_summary,
+        },
+        branch=branch,
+    )
+    return {
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_peaks": subject_peak_path,
+        "group_peak_summary": group_peak_path,
+        "subject_effects_excel": tables[_FINE_LAG_FIELD_STATE_SUBJECT_STEM],
+        "group_effects_excel": tables[_FINE_LAG_FIELD_STATE_GROUP_STEM],
+        "subject_peaks_excel": tables[_FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM],
+        "group_peak_summary_excel": tables[_FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM],
+    }
+
+
+def run_exploratory_transition_field_state_coupling_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    transition_window_sec: float | None = None,
+    field_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    window_sec = _resolve_transition_window_sec(transition_window_sec, cfg)
+    surrogates = _resolve_field_surrogates(field_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    event_paths = _ensure_exploratory_event_tables(cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "transition-field-state-coupling",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "transition_window_sec": float(window_sec),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _TRANSITION_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _TRANSITION_FIELD_STATE_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _TRANSITION_FIELD_STATE_SUBJECT_STEM: cached["subject_effects"],
+                _TRANSITION_FIELD_STATE_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "transitions": event_paths["transitions"],
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            **cached,
+            "subject_effects_excel": tables[_TRANSITION_FIELD_STATE_SUBJECT_STEM],
+            "group_effects_excel": tables[_TRANSITION_FIELD_STATE_GROUP_STEM],
+        }
+    eeg_transitions = read_dataframe(event_paths["transitions"])
+    field_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        subject_frames.append(
+            compute_subject_transition_field_state_coupling(
+                eeg_transitions[eeg_transitions["patient_id"] == patient_id],
+                field_labels[field_labels["patient_id"] == patient_id],
+                patient_id=patient_id,
+                window_sec=window_sec,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=[
+            "peak_metric",
+            "normalization",
+            "n_states",
+            "min_duration_ms",
+            "from_state",
+            "to_state",
+            "response_kind",
+            "response_state",
+        ],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _TRANSITION_FIELD_STATE_SUBJECT_STEM: subject_effects,
+            _TRANSITION_FIELD_STATE_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "transitions": event_paths["transitions"],
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_TRANSITION_FIELD_STATE_SUBJECT_STEM],
+        "group_effects_excel": tables[_TRANSITION_FIELD_STATE_GROUP_STEM],
+    }
+
+
+def run_exploratory_gfp_controlled_field_state_switching_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    transition_window_sec: float | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    window_sec = _resolve_transition_window_sec(transition_window_sec, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    event_paths = _ensure_exploratory_event_tables(cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "gfp-controlled-field-state-switching",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "transition_window_sec": float(window_sec),
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_profiles": cfg.cache_path("coupling", _GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_omnibus": cfg.cache_path("stats", _GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM, ext="parquet", branch=branch),
+        "group_posthoc": cfg.cache_path("stats", _GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM, ext="parquet", branch=branch),
+        "subject_transition_effects": cfg.cache_path(
+            "coupling", _GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM, ext="parquet", branch=branch
+        ),
+        "group_transition_effects": cfg.cache_path(
+            "stats", _GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM, ext="parquet", branch=branch
+        ),
+    }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM: cached["subject_profiles"],
+                _GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM: cached["group_omnibus"],
+                _GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM: cached["group_posthoc"],
+                _GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM: cached["subject_transition_effects"],
+                _GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM: cached["group_transition_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "transitions": event_paths["transitions"],
+            "gfp_trace": eeg_outputs["gfp_trace"],
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            **cached,
+            "subject_profiles_excel": tables[_GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM],
+            "group_omnibus_excel": tables[_GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM],
+            "group_posthoc_excel": tables[_GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM],
+            "subject_transition_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM],
+            "group_transition_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM],
+        }
+    label_df = read_dataframe(eeg_outputs["labels"])
+    gfp_trace_df = read_dataframe(eeg_outputs["gfp_trace"])
+    transition_df = read_dataframe(event_paths["transitions"])
+    field_label_df = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_profile_frames: list[pd.DataFrame] = []
+    subject_transition_frames: list[pd.DataFrame] = []
+    for patient_id in cohort["patient_id"].astype(str):
+        aligned = align_eeg_gfp_and_field_state_labels(
+            label_df[label_df["patient_id"] == patient_id],
+            gfp_trace_df[gfp_trace_df["patient_id"] == patient_id],
+            field_label_df[field_label_df["patient_id"] == patient_id],
+            patient_id=patient_id,
+        )
+        subject_profile_frames.append(
+            compute_subject_gfp_controlled_field_state_profiles(
+                aligned,
+                patient_id=patient_id,
+            )
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_transition_frames.append(
+            compute_subject_gfp_controlled_field_state_transition_effects(
+                transition_df[transition_df["patient_id"] == patient_id],
+                aligned,
+                patient_id=patient_id,
+                window_sec=window_sec,
+                sample_period_sec=sample_period,
+            )
+        )
+    subject_profiles = pd.concat(subject_profile_frames, ignore_index=True) if subject_profile_frames else pd.DataFrame()
+    subject_profiles_path = write_dataframe(subject_profiles, cached["subject_profiles"])
+    group_omnibus = run_group_profile_omnibus_statistics(
+        subject_profiles,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms"],
+        value_column="adjusted_switch_rate",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_omnibus_path = write_dataframe(group_omnibus, cached["group_omnibus"])
+    group_posthoc = run_group_profile_posthoc_statistics(
+        subject_profiles,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms"],
+        value_column="adjusted_switch_rate",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_posthoc_path = write_dataframe(group_posthoc, cached["group_posthoc"])
+    subject_transition_effects = (
+        pd.concat(subject_transition_frames, ignore_index=True) if subject_transition_frames else pd.DataFrame()
+    )
+    subject_transition_effects_path = write_dataframe(subject_transition_effects, cached["subject_transition_effects"])
+    group_transition_effects = run_group_scalar_statistics(
+        subject_transition_effects,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms", "from_state", "to_state"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_transition_effects_path = write_dataframe(group_transition_effects, cached["group_transition_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM: subject_profiles,
+            _GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM: group_omnibus,
+            _GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM: group_posthoc,
+            _GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM: subject_transition_effects,
+            _GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM: group_transition_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "transitions": event_paths["transitions"],
+        "gfp_trace": eeg_outputs["gfp_trace"],
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "subject_profiles": subject_profiles_path,
+        "group_omnibus": group_omnibus_path,
+        "group_posthoc": group_posthoc_path,
+        "subject_transition_effects": subject_transition_effects_path,
+        "group_transition_effects": group_transition_effects_path,
+        "subject_profiles_excel": tables[_GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM],
+        "group_omnibus_excel": tables[_GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM],
+        "group_posthoc_excel": tables[_GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM],
+        "subject_transition_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM],
+        "group_transition_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM],
+    }
+
+
+def run_exploratory_field_state_to_eeg_switching_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    transition_window_sec: float | None = None,
+    field_surrogates: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    window_sec = _resolve_transition_window_sec(transition_window_sec, cfg)
+    surrogates = _resolve_field_surrogates(field_surrogates)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "field-state-to-eeg-switching",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "transition_window_sec": float(window_sec),
+            "surrogates": surrogates,
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path("coupling", _FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_effects": cfg.cache_path("stats", _FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM: cached["subject_effects"],
+                _FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            **cached,
+            "subject_effects_excel": tables[_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM],
+            "group_effects_excel": tables[_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    field_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for offset, patient_id in enumerate(cohort["patient_id"].astype(str)):
+        subject_frames.append(
+            compute_subject_field_state_to_eeg_switching(
+                field_labels[field_labels["patient_id"] == patient_id],
+                eeg_labels[eeg_labels["patient_id"] == patient_id],
+                patient_id=patient_id,
+                window_sec=window_sec,
+                n_surrogates=surrogates,
+                seed=cfg.random_seed + offset,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=[
+            "peak_metric",
+            "normalization",
+            "n_states",
+            "min_duration_ms",
+            "from_state",
+            "to_state",
+            "response_kind",
+            "response_state",
+        ],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM: subject_effects,
+            _FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM],
+        "group_effects_excel": tables[_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM],
+    }
+
+
+def run_exploratory_gfp_controlled_field_state_to_eeg_switching_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    transition_window_sec: float | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    state_count = _resolve_field_state_count(field_state_count, cfg)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    window_sec = _resolve_transition_window_sec(transition_window_sec, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    _field_branch, state_paths = _ensure_seeg_field_state_artifacts(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        state_count=state_count,
+        min_duration_ms=min_duration_ms,
+    )
+    branch = _exploratory_branch(
+        cfg,
+        "gfp-controlled-field-state-to-eeg-switching",
+        params={
+            "peak_metric": normalized_metric,
+            "normalization": normalized_strategy,
+            "state_count": state_count,
+            "min_duration_ms": min_duration_ms,
+            "transition_window_sec": float(window_sec),
+            "min_subjects": threshold,
+        },
+    )
+    cached = {
+        "subject_effects": cfg.cache_path(
+            "coupling",
+            _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM,
+            ext="parquet",
+            branch=branch,
+        ),
+        "group_effects": cfg.cache_path(
+            "stats",
+            _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM,
+            ext="parquet",
+            branch=branch,
+        ),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM: cached["subject_effects"],
+                _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM: cached["group_effects"],
+            },
+            branch=branch,
+        )
+        return {
+            "gfp_trace": run_eeg_states_stage(cfg)["gfp_trace"],
+            "field_trace": state_paths["trace"],
+            "field_peaks": state_paths["peaks"],
+            "field_peak_maps": state_paths["peak_maps"],
+            "field_templates": state_paths["templates"],
+            "field_labels": state_paths["labels"],
+            "field_profiles": state_paths["profiles"],
+            "field_transition_profiles": state_paths["transition_profiles"],
+            **cached,
+            "subject_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM],
+            "group_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM],
+        }
+    eeg_outputs = run_eeg_states_stage(cfg)
+    eeg_labels = read_dataframe(eeg_outputs["labels"])
+    gfp_trace = read_dataframe(eeg_outputs["gfp_trace"])
+    field_labels = read_dataframe(state_paths["labels"])
+    cohort = _eligible_rows(cfg)
+    subject_frames: list[pd.DataFrame] = []
+    for patient_id in cohort["patient_id"].astype(str):
+        patient_field_labels = field_labels[field_labels["patient_id"] == patient_id]
+        field_transitions = build_state_transition_table(
+            patient_field_labels.rename(columns={"field_state": "microstate"})[["time_sec", "microstate"]],
+            patient_id=patient_id,
+        )
+        aligned = align_eeg_gfp_and_field_state_labels(
+            eeg_labels[eeg_labels["patient_id"] == patient_id],
+            gfp_trace[gfp_trace["patient_id"] == patient_id],
+            patient_field_labels,
+            patient_id=patient_id,
+        )
+        sample_period = sample_period_from_times(aligned["time_sec"].to_numpy(dtype=float)) if not aligned.empty else 0.0
+        subject_frames.append(
+            compute_subject_gfp_controlled_field_state_to_eeg_switching(
+                field_transitions,
+                aligned,
+                patient_id=patient_id,
+                window_sec=window_sec,
+                sample_period_sec=sample_period,
+            )
+        )
+    subject_effects = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_path = write_dataframe(subject_effects, cached["subject_effects"])
+    group_effects = run_group_scalar_statistics(
+        subject_effects,
+        group_keys=["peak_metric", "normalization", "n_states", "min_duration_ms", "from_state", "to_state"],
+        value_column="effect_mean_diff",
+        seed=cfg.random_seed,
+        min_subjects=threshold,
+    )
+    group_path = write_dataframe(group_effects, cached["group_effects"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM: subject_effects,
+            _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM: group_effects,
+        },
+        branch=branch,
+    )
+    return {
+        "gfp_trace": eeg_outputs["gfp_trace"],
+        "field_trace": state_paths["trace"],
+        "field_peaks": state_paths["peaks"],
+        "field_peak_maps": state_paths["peak_maps"],
+        "field_templates": state_paths["templates"],
+        "field_labels": state_paths["labels"],
+        "field_profiles": state_paths["profiles"],
+        "field_transition_profiles": state_paths["transition_profiles"],
+        "subject_effects": subject_path,
+        "group_effects": group_path,
+        "subject_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM],
+        "group_effects_excel": tables[_GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM],
+    }
+
+
 def run_exploratory_gfp_global_coupling_stage(
     cfg: AnalysisConfig,
     *,
@@ -1814,6 +3617,11 @@ def run_exploratory_coupling_stage(
     *,
     analysis: str = "all",
     method: str = "all",
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_state_count: int | None = None,
+    field_min_duration_ms: int | None = None,
+    field_archetype_space: str = YEO17_PARCELLATION_NAME,
     global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
     global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
     event_window_sec: float = 1.0,
@@ -1823,6 +3631,8 @@ def run_exploratory_coupling_stage(
     direct_backend: str = "pca-kmeans",
     direct_state_count: int | None = None,
     direct_components: int | None = None,
+    field_surrogates: int | None = None,
+    fine_lag_window_ms: int | None = None,
     max_lag_ms: int | None = None,
     lag_step_ms: int | None = None,
     direct_surrogates: int | None = None,
@@ -1841,6 +3651,13 @@ def run_exploratory_coupling_stage(
                 "direct_backend": direct_backend,
                 "direct_state_count": direct_state_count,
                 "direct_components": direct_components,
+                "field_peak_metric": field_peak_metric,
+                "field_normalization": field_normalization,
+                "field_state_count": field_state_count,
+                "field_min_duration_ms": field_min_duration_ms,
+                "field_archetype_space": field_archetype_space,
+                "field_surrogates": field_surrogates,
+                "fine_lag_window_ms": fine_lag_window_ms,
                 "max_lag_ms": max_lag_ms,
                 "lag_step_ms": lag_step_ms,
                 "direct_surrogates": direct_surrogates,
@@ -1885,6 +3702,13 @@ def run_exploratory_coupling_stage(
                     direct_backend=direct_backend,
                     direct_state_count=direct_state_count,
                     direct_components=direct_components,
+                    field_peak_metric=field_peak_metric,
+                    field_normalization=field_normalization,
+                    field_state_count=field_state_count,
+                    field_min_duration_ms=field_min_duration_ms,
+                    field_archetype_space=field_archetype_space,
+                    field_surrogates=field_surrogates,
+                    fine_lag_window_ms=fine_lag_window_ms,
                     max_lag_ms=max_lag_ms,
                     lag_step_ms=lag_step_ms,
                     direct_surrogates=direct_surrogates,
@@ -1936,6 +3760,104 @@ def run_exploratory_coupling_stage(
             direct_components=direct_components,
             transition_window_sec=transition_window_sec,
             direct_surrogates=direct_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "field-state-coupling":
+        return run_exploratory_field_state_coupling_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            field_surrogates=field_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "lagged-field-state-coupling":
+        return run_exploratory_lagged_field_state_coupling_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            max_lag_ms=max_lag_ms,
+            lag_step_ms=lag_step_ms,
+            field_surrogates=field_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "fine-lag-field-state-coupling":
+        return run_exploratory_fine_lag_field_state_coupling_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            fine_lag_window_ms=fine_lag_window_ms,
+            field_surrogates=field_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "transition-field-state-coupling":
+        return run_exploratory_transition_field_state_coupling_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            transition_window_sec=transition_window_sec,
+            field_surrogates=field_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "field-state-to-eeg-switching":
+        return run_exploratory_field_state_to_eeg_switching_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            transition_window_sec=transition_window_sec,
+            field_surrogates=field_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "gfp-controlled-field-state-switching":
+        return run_exploratory_gfp_controlled_field_state_switching_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            transition_window_sec=transition_window_sec,
+            min_subjects=min_subjects,
+        )
+    if selected == "field-state-archetypes":
+        return run_exploratory_field_state_archetypes_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            field_archetype_space=field_archetype_space,
+            min_subjects=min_subjects,
+        )
+    if selected == "archetype-conditioned-eeg-topography":
+        return run_exploratory_archetype_conditioned_eeg_topography_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            field_archetype_space=field_archetype_space,
+            fine_lag_window_ms=fine_lag_window_ms,
+            transition_window_sec=transition_window_sec,
+            field_surrogates=field_surrogates,
+            min_subjects=min_subjects,
+        )
+    if selected == "gfp-controlled-field-state-to-eeg-switching":
+        return run_exploratory_gfp_controlled_field_state_to_eeg_switching_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_state_count=field_state_count,
+            field_min_duration_ms=field_min_duration_ms,
+            transition_window_sec=transition_window_sec,
             min_subjects=min_subjects,
         )
     if selected == "gfp-global-coupling":
@@ -2232,6 +4154,228 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             )
             outputs[f"{branch}_transition_coupling_subject_excel"] = table_reports["subject_transition_coupling"]
             outputs[f"{branch}_transition_coupling_group_excel"] = table_reports["group_transition_coupling"]
+    for branch, template_path in _discover_branch_paths(cfg, "coupling", _FIELD_STATE_TEMPLATES_STEM, ext="parquet"):
+        template_df = read_dataframe(template_path)
+        outputs[f"{branch}_field_template_panels"] = plot_subject_template_panels(
+            template_df,
+            cfg.report_path("exploratory_field_state_templates", ext="png", branch=branch),
+            title=f"Exploratory {state_label} subject-level SEEG field templates",
+        )
+        profile_path = cfg.cache_path("coupling", _FIELD_STATE_PROFILES_STEM, ext="parquet", branch=branch)
+        transition_profile_path = cfg.cache_path("coupling", _FIELD_STATE_TRANSITION_PROFILES_STEM, ext="parquet", branch=branch)
+        if profile_path.exists():
+            profile_df = read_dataframe(profile_path)
+            outputs[f"{branch}_field_profile_heatmap"] = plot_subject_state_profile_heatmap(
+                profile_df,
+                cfg.report_path("exploratory_field_state_profiles", ext="png", branch=branch),
+                title=f"Exploratory {state_label} SEEG field-state occupancy",
+                state_column="field_state",
+                value_column="occupancy",
+            )
+        if transition_profile_path.exists():
+            transition_profile_df = read_dataframe(transition_profile_path)
+            transition_group = (
+                transition_profile_df.groupby(["from_state", "to_state"], as_index=False)
+                .agg(mean_effect=("transition_probability", "mean"))
+                .reset_index(drop=True)
+            )
+            outputs[f"{branch}_field_transition_matrix"] = plot_state_transition_matrix(
+                transition_group,
+                cfg.report_path("exploratory_field_state_transitions", ext="png", branch=branch),
+                title=f"Exploratory {state_label} mean SEEG field-state transitions",
+            )
+        report_sources = {_FIELD_STATE_TEMPLATES_STEM: template_path}
+        if profile_path.exists():
+            report_sources[_FIELD_STATE_PROFILES_STEM] = profile_path
+        if transition_profile_path.exists():
+            report_sources[_FIELD_STATE_TRANSITION_PROFILES_STEM] = transition_profile_path
+        table_reports = _write_table_reports_from_paths(cfg, report_sources, branch=branch)
+        outputs[f"{branch}_field_templates_excel"] = table_reports[_FIELD_STATE_TEMPLATES_STEM]
+        if _FIELD_STATE_PROFILES_STEM in table_reports:
+            outputs[f"{branch}_field_profiles_excel"] = table_reports[_FIELD_STATE_PROFILES_STEM]
+        if _FIELD_STATE_TRANSITION_PROFILES_STEM in table_reports:
+            outputs[f"{branch}_field_transition_profiles_excel"] = table_reports[_FIELD_STATE_TRANSITION_PROFILES_STEM]
+    for branch, archetype_path in _discover_branch_paths(cfg, "coupling", _FIELD_ARCHETYPE_TEMPLATES_STEM, ext="parquet"):
+        archetype_df = read_dataframe(archetype_path)
+        outputs[f"{branch}_field_archetype_panels"] = plot_subject_template_panels(
+            archetype_df,
+            cfg.report_path("exploratory_field_state_archetypes", ext="png", branch=branch),
+            title=f"Exploratory {state_label} SEEG field-state archetypes",
+            subject_column="patient_id",
+            x_label="Common-space unit",
+        )
+        assignment_path = cfg.cache_path("coupling", _FIELD_ARCHETYPE_ASSIGNMENTS_STEM, ext="parquet", branch=branch)
+        support_path = cfg.cache_path("stats", _FIELD_ARCHETYPE_SUPPORT_STEM, ext="parquet", branch=branch)
+        projection_path = cfg.cache_path("coupling", _FIELD_ARCHETYPE_PROJECTIONS_STEM, ext="parquet", branch=branch)
+        if assignment_path.exists():
+            assignment_df = read_dataframe(assignment_path)
+            outputs[f"{branch}_field_archetype_assignments"] = plot_subject_state_profile_heatmap(
+                assignment_df,
+                cfg.report_path("exploratory_field_state_archetype_assignments", ext="png", branch=branch),
+                title=f"Exploratory {state_label} SEEG field-state archetype assignments",
+                state_column="assigned_archetype",
+                value_column="assignment_similarity",
+            )
+        report_sources = {_FIELD_ARCHETYPE_TEMPLATES_STEM: archetype_path}
+        if projection_path.exists():
+            report_sources[_FIELD_ARCHETYPE_PROJECTIONS_STEM] = projection_path
+        if assignment_path.exists():
+            report_sources[_FIELD_ARCHETYPE_ASSIGNMENTS_STEM] = assignment_path
+        if support_path.exists():
+            report_sources[_FIELD_ARCHETYPE_SUPPORT_STEM] = support_path
+        table_reports = _write_table_reports_from_paths(cfg, report_sources, branch=branch)
+        outputs[f"{branch}_field_archetype_templates_excel"] = table_reports[_FIELD_ARCHETYPE_TEMPLATES_STEM]
+        if _FIELD_ARCHETYPE_PROJECTIONS_STEM in table_reports:
+            outputs[f"{branch}_field_archetype_projections_excel"] = table_reports[_FIELD_ARCHETYPE_PROJECTIONS_STEM]
+        if _FIELD_ARCHETYPE_ASSIGNMENTS_STEM in table_reports:
+            outputs[f"{branch}_field_archetype_assignments_excel"] = table_reports[_FIELD_ARCHETYPE_ASSIGNMENTS_STEM]
+        if _FIELD_ARCHETYPE_SUPPORT_STEM in table_reports:
+            outputs[f"{branch}_field_archetype_support_excel"] = table_reports[_FIELD_ARCHETYPE_SUPPORT_STEM]
+    for branch, group_map_path in _discover_branch_paths(cfg, "coupling", _ARCHETYPE_EEG_MAP_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_archetype_conditioned_eeg_topographies"] = plot_eeg_topography_panels(
+            read_dataframe(group_map_path),
+            cfg.report_path("exploratory_archetype_conditioned_eeg_topographies", ext="png", branch=branch),
+            title=f"Exploratory {state_label} archetype-conditioned EEG topographies",
+            state_column="assigned_archetype",
+        )
+        report_sources = {
+            _ARCHETYPE_EEG_MAP_GROUP_STEM: group_map_path,
+        }
+        subject_map_path = cfg.cache_path("coupling", _ARCHETYPE_EEG_MAP_SUBJECT_STEM, ext="parquet", branch=branch)
+        similarity_path = cfg.cache_path("stats", _ARCHETYPE_EEG_SIMILARITY_GROUP_STEM, ext="parquet", branch=branch)
+        subject_similarity_path = cfg.cache_path(
+            "coupling", _ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM, ext="parquet", branch=branch
+        )
+        preference_path = cfg.cache_path("stats", _ARCHETYPE_EEG_PREFERENCE_GROUP_STEM, ext="parquet", branch=branch)
+        subject_preference_path = cfg.cache_path(
+            "coupling", _ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM, ext="parquet", branch=branch
+        )
+        fine_lag_group_path = cfg.cache_path("stats", _ARCHETYPE_EEG_FINE_LAG_GROUP_STEM, ext="parquet", branch=branch)
+        fine_lag_subject_path = cfg.cache_path(
+            "coupling", _ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM, ext="parquet", branch=branch
+        )
+        fine_lag_peak_subject_path = cfg.cache_path(
+            "coupling", _ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM, ext="parquet", branch=branch
+        )
+        fine_lag_peak_group_path = cfg.cache_path(
+            "stats", _ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM, ext="parquet", branch=branch
+        )
+        transition_group_path = cfg.cache_path("stats", _ARCHETYPE_EEG_TRANSITION_GROUP_STEM, ext="parquet", branch=branch)
+        transition_subject_path = cfg.cache_path(
+            "coupling", _ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM, ext="parquet", branch=branch
+        )
+        if similarity_path.exists():
+            outputs[f"{branch}_archetype_template_similarity_heatmap"] = plot_group_metric_heatmap(
+                read_dataframe(similarity_path),
+                cfg.report_path("exploratory_archetype_eeg_template_similarity", ext="png", branch=branch),
+                title=f"Exploratory {state_label} archetype-conditioned EEG template similarity",
+                value_column="mean_similarity",
+                unit_column="microstate",
+                row_column="assigned_archetype",
+            )
+            report_sources[_ARCHETYPE_EEG_SIMILARITY_GROUP_STEM] = similarity_path
+        if preference_path.exists():
+            outputs[f"{branch}_archetype_state_preference_heatmap"] = plot_group_metric_heatmap(
+                read_dataframe(preference_path),
+                cfg.report_path("exploratory_archetype_eeg_state_preference", ext="png", branch=branch),
+                title=f"Exploratory {state_label} archetype-conditioned EEG state preference",
+                value_column="mean_effect",
+                unit_column="microstate",
+                row_column="assigned_archetype",
+            )
+            report_sources[_ARCHETYPE_EEG_PREFERENCE_GROUP_STEM] = preference_path
+        if fine_lag_group_path.exists():
+            outputs[f"{branch}_archetype_fine_lag_curve"] = plot_effect_curve(
+                read_dataframe(fine_lag_group_path),
+                cfg.report_path("exploratory_archetype_eeg_fine_lag_coupling", ext="png", branch=branch),
+                title=f"Exploratory {state_label} archetype-to-EEG fine-lag coupling",
+                x_column="lag_ms",
+                x_label="Lag (ms)",
+            )
+            report_sources[_ARCHETYPE_EEG_FINE_LAG_GROUP_STEM] = fine_lag_group_path
+        if fine_lag_peak_subject_path.exists():
+            subject_peak_df = read_dataframe(fine_lag_peak_subject_path)
+            if not subject_peak_df.empty:
+                outputs[f"{branch}_archetype_fine_lag_peak_heatmap"] = plot_subject_state_profile_heatmap(
+                    subject_peak_df.melt(
+                        id_vars=["patient_id"],
+                        value_vars=["peak_lag_ms", "peak_effect_mean_diff", "peak_width_ms"],
+                        var_name="summary_kind",
+                        value_name="summary_value",
+                    ),
+                    cfg.report_path("exploratory_archetype_eeg_fine_lag_peak_summary", ext="png", branch=branch),
+                    title=f"Exploratory {state_label} archetype-conditioned EEG fine-lag peak summaries",
+                    state_column="summary_kind",
+                    value_column="summary_value",
+                )
+            report_sources[_ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM] = fine_lag_peak_subject_path
+        if fine_lag_peak_group_path.exists():
+            report_sources[_ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM] = fine_lag_peak_group_path
+        if transition_group_path.exists():
+            transition_group_df = read_dataframe(transition_group_path)
+            plotted_transition_df = (
+                transition_group_df[transition_group_df["response_kind"] == "any-switch"].copy()
+                if "response_kind" in transition_group_df.columns
+                else transition_group_df
+            )
+            outputs[f"{branch}_archetype_to_eeg_switching_matrix"] = plot_state_transition_matrix(
+                plotted_transition_df,
+                cfg.report_path("exploratory_archetype_to_eeg_switching", ext="png", branch=branch),
+                title=f"Exploratory {state_label} archetype-led EEG switching",
+                x_label="SEEG archetype to_state",
+                y_label="SEEG archetype from_state",
+            )
+            report_sources[_ARCHETYPE_EEG_TRANSITION_GROUP_STEM] = transition_group_path
+        if subject_map_path.exists():
+            report_sources[_ARCHETYPE_EEG_MAP_SUBJECT_STEM] = subject_map_path
+        if subject_similarity_path.exists():
+            report_sources[_ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM] = subject_similarity_path
+        if subject_preference_path.exists():
+            report_sources[_ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM] = subject_preference_path
+        if fine_lag_subject_path.exists():
+            report_sources[_ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM] = fine_lag_subject_path
+        if transition_subject_path.exists():
+            report_sources[_ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM] = transition_subject_path
+        table_reports = _write_table_reports_from_paths(cfg, report_sources, branch=branch)
+        if _ARCHETYPE_EEG_MAP_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_archetype_conditioned_eeg_maps_subject_excel"] = table_reports[_ARCHETYPE_EEG_MAP_SUBJECT_STEM]
+        outputs[f"{branch}_archetype_conditioned_eeg_maps_group_excel"] = table_reports[_ARCHETYPE_EEG_MAP_GROUP_STEM]
+        if _ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_archetype_template_similarity_subject_excel"] = table_reports[
+                _ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM
+            ]
+        if _ARCHETYPE_EEG_SIMILARITY_GROUP_STEM in table_reports:
+            outputs[f"{branch}_archetype_template_similarity_group_excel"] = table_reports[
+                _ARCHETYPE_EEG_SIMILARITY_GROUP_STEM
+            ]
+        if _ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_archetype_state_preference_subject_excel"] = table_reports[
+                _ARCHETYPE_EEG_PREFERENCE_SUBJECT_STEM
+            ]
+        if _ARCHETYPE_EEG_PREFERENCE_GROUP_STEM in table_reports:
+            outputs[f"{branch}_archetype_state_preference_group_excel"] = table_reports[
+                _ARCHETYPE_EEG_PREFERENCE_GROUP_STEM
+            ]
+        if _ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_archetype_fine_lag_subject_excel"] = table_reports[_ARCHETYPE_EEG_FINE_LAG_SUBJECT_STEM]
+        if _ARCHETYPE_EEG_FINE_LAG_GROUP_STEM in table_reports:
+            outputs[f"{branch}_archetype_fine_lag_group_excel"] = table_reports[_ARCHETYPE_EEG_FINE_LAG_GROUP_STEM]
+        if _ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_archetype_fine_lag_peak_subject_excel"] = table_reports[
+                _ARCHETYPE_EEG_FINE_LAG_PEAK_SUBJECT_STEM
+            ]
+        if _ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM in table_reports:
+            outputs[f"{branch}_archetype_fine_lag_peak_group_excel"] = table_reports[
+                _ARCHETYPE_EEG_FINE_LAG_PEAK_GROUP_STEM
+            ]
+        if _ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_archetype_to_eeg_switching_subject_excel"] = table_reports[
+                _ARCHETYPE_EEG_TRANSITION_SUBJECT_STEM
+            ]
+        if _ARCHETYPE_EEG_TRANSITION_GROUP_STEM in table_reports:
+            outputs[f"{branch}_archetype_to_eeg_switching_group_excel"] = table_reports[
+                _ARCHETYPE_EEG_TRANSITION_GROUP_STEM
+            ]
     for branch, group_path in _discover_branch_paths(cfg, "stats", _DIRECT_STATE_GROUP_STEM, ext="parquet"):
         outputs[f"{branch}_direct_state_coupling_curve"] = plot_direct_coupling_lag_curve(
             read_dataframe(group_path),
@@ -2286,6 +4430,134 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             )
             outputs[f"{branch}_transition_state_coupling_subject_excel"] = table_reports[_TRANSITION_STATE_SUBJECT_STEM]
             outputs[f"{branch}_transition_state_coupling_group_excel"] = table_reports[_TRANSITION_STATE_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _FIELD_STATE_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_field_state_coupling_curve"] = plot_direct_coupling_lag_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_field_state_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} EEG and SEEG field-state coupling",
+        )
+        subject_path = cfg.cache_path("coupling", _FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _FIELD_STATE_SUBJECT_STEM: subject_path,
+                    _FIELD_STATE_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_field_state_coupling_subject_excel"] = table_reports[_FIELD_STATE_SUBJECT_STEM]
+            outputs[f"{branch}_field_state_coupling_group_excel"] = table_reports[_FIELD_STATE_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _LAGGED_FIELD_STATE_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_lagged_field_state_coupling_curve"] = plot_direct_coupling_lag_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_lagged_field_state_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} lagged EEG and SEEG field-state coupling",
+        )
+        subject_path = cfg.cache_path("coupling", _LAGGED_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _LAGGED_FIELD_STATE_SUBJECT_STEM: subject_path,
+                    _LAGGED_FIELD_STATE_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_lagged_field_state_coupling_subject_excel"] = table_reports[_LAGGED_FIELD_STATE_SUBJECT_STEM]
+            outputs[f"{branch}_lagged_field_state_coupling_group_excel"] = table_reports[_LAGGED_FIELD_STATE_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _FINE_LAG_FIELD_STATE_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_fine_lag_field_state_coupling_curve"] = plot_direct_coupling_lag_curve(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_fine_lag_field_state_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} fine-lag EEG and SEEG field-state coupling",
+        )
+        subject_peaks_path = cfg.cache_path("coupling", _FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM, ext="parquet", branch=branch)
+        group_peak_path = cfg.cache_path("stats", _FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM, ext="parquet", branch=branch)
+        if subject_peaks_path.exists():
+            subject_peaks_df = read_dataframe(subject_peaks_path)
+            if not subject_peaks_df.empty:
+                subject_peak_long = subject_peaks_df.melt(
+                    id_vars=["patient_id"],
+                    value_vars=["peak_lag_ms", "peak_effect_mean_diff", "peak_width_ms"],
+                    var_name="summary_kind",
+                    value_name="summary_value",
+                )
+                outputs[f"{branch}_fine_lag_field_state_peak_heatmap"] = plot_subject_state_profile_heatmap(
+                    subject_peak_long,
+                    cfg.report_path("exploratory_fine_lag_field_state_peak_summary", ext="png", branch=branch),
+                    title=f"Exploratory {state_label} fine-lag field-state peak summaries",
+                    state_column="summary_kind",
+                    value_column="summary_value",
+                )
+        report_sources = {
+            _FINE_LAG_FIELD_STATE_GROUP_STEM: group_path,
+        }
+        subject_curve_path = cfg.cache_path("coupling", _FINE_LAG_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_curve_path.exists():
+            report_sources[_FINE_LAG_FIELD_STATE_SUBJECT_STEM] = subject_curve_path
+        if subject_peaks_path.exists():
+            report_sources[_FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM] = subject_peaks_path
+        if group_peak_path.exists():
+            report_sources[_FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM] = group_peak_path
+        table_reports = _write_table_reports_from_paths(cfg, report_sources, branch=branch)
+        if _FINE_LAG_FIELD_STATE_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_fine_lag_field_state_coupling_subject_excel"] = table_reports[_FINE_LAG_FIELD_STATE_SUBJECT_STEM]
+        outputs[f"{branch}_fine_lag_field_state_coupling_group_excel"] = table_reports[_FINE_LAG_FIELD_STATE_GROUP_STEM]
+        if _FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_fine_lag_field_state_peak_subject_excel"] = table_reports[_FINE_LAG_FIELD_STATE_PEAK_SUBJECT_STEM]
+        if _FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM in table_reports:
+            outputs[f"{branch}_fine_lag_field_state_peak_group_excel"] = table_reports[_FINE_LAG_FIELD_STATE_PEAK_GROUP_STEM]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _TRANSITION_FIELD_STATE_GROUP_STEM, ext="parquet"):
+        group_df = read_dataframe(group_path)
+        plotted_df = group_df[group_df["response_kind"] == "any-switch"].copy() if "response_kind" in group_df.columns else group_df
+        outputs[f"{branch}_transition_field_state_coupling_matrix"] = plot_state_transition_matrix(
+            plotted_df,
+            cfg.report_path("exploratory_transition_field_state_coupling", ext="png", branch=branch),
+            title=f"Exploratory {state_label} transition-conditioned SEEG field-state switching",
+        )
+        subject_path = cfg.cache_path("coupling", _TRANSITION_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _TRANSITION_FIELD_STATE_SUBJECT_STEM: subject_path,
+                    _TRANSITION_FIELD_STATE_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_transition_field_state_coupling_subject_excel"] = table_reports[
+                _TRANSITION_FIELD_STATE_SUBJECT_STEM
+            ]
+            outputs[f"{branch}_transition_field_state_coupling_group_excel"] = table_reports[
+                _TRANSITION_FIELD_STATE_GROUP_STEM
+            ]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM, ext="parquet"):
+        group_df = read_dataframe(group_path)
+        plotted_df = group_df[group_df["response_kind"] == "any-switch"].copy() if "response_kind" in group_df.columns else group_df
+        outputs[f"{branch}_field_state_to_eeg_switching_matrix"] = plot_state_transition_matrix(
+            plotted_df,
+            cfg.report_path("exploratory_field_state_to_eeg_switching", ext="png", branch=branch),
+            title=f"Exploratory {state_label} SEEG-led EEG switching",
+            x_label="SEEG to_state",
+            y_label="SEEG from_state",
+        )
+        subject_path = cfg.cache_path("coupling", _FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM: subject_path,
+                    _FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_field_state_to_eeg_switching_subject_excel"] = table_reports[
+                _FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM
+            ]
+            outputs[f"{branch}_field_state_to_eeg_switching_group_excel"] = table_reports[
+                _FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM
+            ]
     for branch, group_path in _discover_branch_paths(cfg, "stats", _GFP_GLOBAL_GROUP_STEM, ext="parquet"):
         outputs[f"{branch}_gfp_global_coupling_curve"] = plot_effect_curve(
             read_dataframe(group_path),
@@ -2412,4 +4684,90 @@ def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
             )
             outputs[f"{branch}_gfp_controlled_transition_subject_excel"] = table_reports[_GFP_CONTROLLED_TRANSITION_SUBJECT_STEM]
             outputs[f"{branch}_gfp_controlled_transition_group_excel"] = table_reports[_GFP_CONTROLLED_TRANSITION_GROUP_STEM]
+    for branch, omnibus_path in _discover_branch_paths(cfg, "stats", _GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM, ext="parquet"):
+        outputs[f"{branch}_gfp_controlled_field_state_omnibus_heatmap"] = plot_group_metric_heatmap(
+            read_dataframe(omnibus_path),
+            cfg.report_path("exploratory_gfp_controlled_field_state_omnibus", ext="png", branch=branch),
+            title=f"Exploratory {state_label} GFP-controlled field-state switching omnibus statistics",
+            value_column="statistic",
+            unit_column="peak_metric",
+        )
+        posthoc_path = cfg.cache_path("stats", _GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM, ext="parquet", branch=branch)
+        if posthoc_path.exists():
+            outputs[f"{branch}_gfp_controlled_field_state_posthoc_heatmap"] = plot_group_metric_heatmap(
+                read_dataframe(posthoc_path),
+                cfg.report_path("exploratory_gfp_controlled_field_state_posthoc", ext="png", branch=branch),
+                title=f"Exploratory {state_label} GFP-controlled field-state switching post-hoc effects",
+                value_column="mean_effect",
+                unit_column="peak_metric",
+                row_column="contrast",
+            )
+        transition_group_path = cfg.cache_path("stats", _GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM, ext="parquet", branch=branch)
+        if transition_group_path.exists():
+            outputs[f"{branch}_gfp_controlled_field_state_transition_matrix"] = plot_state_transition_matrix(
+                read_dataframe(transition_group_path),
+                cfg.report_path("exploratory_gfp_controlled_field_state_transition", ext="png", branch=branch),
+                title=f"Exploratory {state_label} GFP-controlled field-state transition switching",
+            )
+        subject_profile_path = cfg.cache_path("coupling", _GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM, ext="parquet", branch=branch)
+        subject_transition_path = cfg.cache_path(
+            "coupling", _GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM, ext="parquet", branch=branch
+        )
+        report_sources = {
+            _GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM: omnibus_path,
+        }
+        if subject_profile_path.exists():
+            report_sources[_GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM] = subject_profile_path
+        if posthoc_path.exists():
+            report_sources[_GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM] = posthoc_path
+        if subject_transition_path.exists():
+            report_sources[_GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM] = subject_transition_path
+        if transition_group_path.exists():
+            report_sources[_GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM] = transition_group_path
+        table_reports = _write_table_reports_from_paths(cfg, report_sources, branch=branch)
+        if _GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_gfp_controlled_field_state_subject_excel"] = table_reports[
+                _GFP_CONTROLLED_FIELD_STATE_SUBJECT_STEM
+            ]
+        outputs[f"{branch}_gfp_controlled_field_state_group_omnibus_excel"] = table_reports[
+            _GFP_CONTROLLED_FIELD_STATE_GROUP_OMNIBUS_STEM
+        ]
+        if _GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM in table_reports:
+            outputs[f"{branch}_gfp_controlled_field_state_group_posthoc_excel"] = table_reports[
+                _GFP_CONTROLLED_FIELD_STATE_GROUP_POSTHOC_STEM
+            ]
+        if _GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM in table_reports:
+            outputs[f"{branch}_gfp_controlled_field_state_transition_subject_excel"] = table_reports[
+                _GFP_CONTROLLED_FIELD_STATE_TRANSITION_SUBJECT_STEM
+            ]
+        if _GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM in table_reports:
+            outputs[f"{branch}_gfp_controlled_field_state_transition_group_excel"] = table_reports[
+                _GFP_CONTROLLED_FIELD_STATE_TRANSITION_GROUP_STEM
+            ]
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM, ext="parquet"):
+        outputs[f"{branch}_gfp_controlled_field_state_to_eeg_switching_matrix"] = plot_state_transition_matrix(
+            read_dataframe(group_path),
+            cfg.report_path("exploratory_gfp_controlled_field_state_to_eeg_switching", ext="png", branch=branch),
+            title=f"Exploratory {state_label} GFP-controlled SEEG-led EEG switching",
+            x_label="SEEG to_state",
+            y_label="SEEG from_state",
+        )
+        subject_path = cfg.cache_path(
+            "coupling", _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM, ext="parquet", branch=branch
+        )
+        if subject_path.exists():
+            table_reports = _write_table_reports_from_paths(
+                cfg,
+                {
+                    _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM: subject_path,
+                    _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM: group_path,
+                },
+                branch=branch,
+            )
+            outputs[f"{branch}_gfp_controlled_field_state_to_eeg_switching_subject_excel"] = table_reports[
+                _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM
+            ]
+            outputs[f"{branch}_gfp_controlled_field_state_to_eeg_switching_group_excel"] = table_reports[
+                _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM
+            ]
     return outputs

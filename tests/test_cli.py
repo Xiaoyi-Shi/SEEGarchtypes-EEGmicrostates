@@ -52,6 +52,15 @@ def test_cli_describes_aal3_region_outputs() -> None:
     assert "direct-state-coupling" in exploratory_help
     assert "lagged-state-coupling" in exploratory_help
     assert "transition-state-coupling" in exploratory_help
+    assert "field-state-coupling" in exploratory_help
+    assert "lagged-field-state-coupling" in exploratory_help
+    assert "fine-lag-field-state-coupling" in exploratory_help
+    assert "transition-field-state-coupling" in exploratory_help
+    assert "field-state-to-eeg-switching" in exploratory_help
+    assert "gfp-controlled-field-state-switching" in exploratory_help
+    assert "field-state-archetypes" in exploratory_help
+    assert "archetype-conditioned-eeg-topography" in exploratory_help
+    assert "gfp-controlled-field-state-to-eeg-switching" in exploratory_help
     assert "gfp-global-coupling" in exploratory_help
     assert "lagged-gfp-global-coupling" in exploratory_help
     assert "peak-gfp-global-coupling" in exploratory_help
@@ -151,6 +160,63 @@ def test_run_exploratory_coupling_accepts_direct_state_options() -> None:
     assert args.lag_step_ms == 40
     assert args.transition_window_sec == 0.5
     assert args.direct_surrogates == 64
+
+
+def test_run_exploratory_coupling_accepts_field_state_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-exploratory-coupling",
+            "--analysis",
+            "fine-lag-field-state-coupling",
+            "--field-peak-metric",
+            "spatial-std",
+            "--field-normalization",
+            "robust-zscore",
+            "--field-state-count",
+            "5",
+            "--field-min-duration-ms",
+            "20",
+            "--field-archetype-space",
+            "yeo17",
+            "--field-surrogates",
+            "64",
+            "--fine-lag-window-ms",
+            "24",
+        ]
+    )
+    assert args.analysis == "fine-lag-field-state-coupling"
+    assert args.field_peak_metric == "spatial-std"
+    assert args.field_normalization == "robust-zscore"
+    assert args.field_state_count == 5
+    assert args.field_min_duration_ms == 20
+    assert args.field_archetype_space == "yeo17"
+    assert args.field_surrogates == 64
+    assert args.fine_lag_window_ms == 24
+
+
+def test_run_exploratory_coupling_accepts_archetype_conditioned_topography_analysis() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-exploratory-coupling",
+            "--analysis",
+            "archetype-conditioned-eeg-topography",
+            "--field-archetype-space",
+            "yeo17",
+            "--fine-lag-window-ms",
+            "32",
+            "--transition-window-sec",
+            "0.2",
+            "--field-surrogates",
+            "48",
+        ]
+    )
+    assert args.analysis == "archetype-conditioned-eeg-topography"
+    assert args.field_archetype_space == "yeo17"
+    assert args.fine_lag_window_ms == 32
+    assert args.transition_window_sec == 0.2
+    assert args.field_surrogates == 48
 
 
 def test_run_exploratory_coupling_accepts_gfp_global_options() -> None:

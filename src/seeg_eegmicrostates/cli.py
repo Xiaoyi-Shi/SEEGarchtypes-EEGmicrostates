@@ -18,10 +18,17 @@ from seeg_eegmicrostates.config import (
     SUPPORTED_ANALYSIS_STATES,
 )
 from seeg_eegmicrostates.coupling import (
+    DEFAULT_FINE_FIELD_LAG_WINDOW_MS,
+    DEFAULT_FIELD_STATE_NORMALIZATION,
+    DEFAULT_FIELD_STATE_PEAK_METRIC,
+    DEFAULT_FIELD_STATE_SURROGATES,
     DEFAULT_GFP_GLOBAL_METRIC,
     DEFAULT_GFP_GLOBAL_SURROGATES,
     DEFAULT_GFP_GLOBAL_WEIGHTING,
     DEFAULT_GFP_PEAK_WINDOW_SEC,
+    SUPPORTED_FIELD_STATE_NORMALIZATIONS,
+    SUPPORTED_FIELD_STATE_PEAK_METRICS,
+    SUPPORTED_FIELD_ARCHETYPE_SPACES,
     SUPPORTED_DIRECT_STATE_BACKENDS,
     SUPPORTED_GFP_GLOBAL_METRICS,
     SUPPORTED_GFP_GLOBAL_WEIGHTINGS,
@@ -45,6 +52,15 @@ _EXPLORATORY_ANALYSIS_CHOICES = (
     "direct-state-coupling",
     "lagged-state-coupling",
     "transition-state-coupling",
+    "field-state-coupling",
+    "lagged-field-state-coupling",
+    "fine-lag-field-state-coupling",
+    "transition-field-state-coupling",
+    "field-state-to-eeg-switching",
+    "gfp-controlled-field-state-switching",
+    "field-state-archetypes",
+    "archetype-conditioned-eeg-topography",
+    "gfp-controlled-field-state-to-eeg-switching",
     "gfp-global-coupling",
     "lagged-gfp-global-coupling",
     "peak-gfp-global-coupling",
@@ -104,6 +120,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     exploratory_parser.add_argument("--analysis", default="all", choices=["all", *_EXPLORATORY_ANALYSIS_CHOICES])
     exploratory_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
+    exploratory_parser.add_argument(
+        "--field-peak-metric",
+        default=DEFAULT_FIELD_STATE_PEAK_METRIC,
+        choices=list(SUPPORTED_FIELD_STATE_PEAK_METRICS),
+        help="Peak metric used to define subject-level SEEG global-field-state peak maps.",
+    )
+    exploratory_parser.add_argument(
+        "--field-normalization",
+        default=DEFAULT_FIELD_STATE_NORMALIZATION,
+        choices=list(SUPPORTED_FIELD_STATE_NORMALIZATIONS),
+        help="Channel-wise normalization used before SEEG field-state peak-map clustering.",
+    )
+    exploratory_parser.add_argument(
+        "--field-state-count",
+        type=int,
+        default=None,
+        help="Optional subject-level SEEG field-state count. Defaults to the EEG microstate count.",
+    )
+    exploratory_parser.add_argument(
+        "--field-min-duration-ms",
+        type=int,
+        default=None,
+        help="Minimum duration in milliseconds applied when backfitting continuous SEEG field-state labels.",
+    )
+    exploratory_parser.add_argument(
+        "--field-surrogates",
+        type=int,
+        default=DEFAULT_FIELD_STATE_SURROGATES,
+        help="Number of circular-shift surrogates used by SEEG field-state coupling statistics.",
+    )
+    exploratory_parser.add_argument(
+        "--field-archetype-space",
+        default="yeo17",
+        choices=list(SUPPORTED_FIELD_ARCHETYPE_SPACES),
+        help="Common-space representation used for cross-subject SEEG field-state archetype matching.",
+    )
+    exploratory_parser.add_argument(
+        "--fine-lag-window-ms",
+        type=int,
+        default=DEFAULT_FINE_FIELD_LAG_WINDOW_MS,
+        help="Half-window in milliseconds for native 4 ms fine-lag SEEG field-state coupling around zero lag.",
+    )
     exploratory_parser.add_argument(
         "--global-metric",
         default=DEFAULT_GFP_GLOBAL_METRIC,
@@ -257,6 +315,13 @@ def main(argv: list[str] | None = None) -> None:
                 direct_backend=args.direct_backend,
                 direct_state_count=args.direct_state_count,
                 direct_components=args.direct_components,
+                field_peak_metric=args.field_peak_metric,
+                field_normalization=args.field_normalization,
+                field_state_count=args.field_state_count,
+                field_min_duration_ms=args.field_min_duration_ms,
+                field_archetype_space=args.field_archetype_space,
+                field_surrogates=args.field_surrogates,
+                fine_lag_window_ms=args.fine_lag_window_ms,
                 max_lag_ms=args.max_lag_ms,
                 lag_step_ms=args.lag_step_ms,
                 direct_surrogates=args.direct_surrogates,

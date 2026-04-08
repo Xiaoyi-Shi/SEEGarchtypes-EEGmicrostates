@@ -6,7 +6,7 @@ This repository contains a cached, staged analysis pipeline for studying synchro
 - `1-40 Hz` SEEG `AAL3` region signal generation
 - EEG-state-conditioned `AAL3` activity profiles plus four-state omnibus/post-hoc outputs
 - EEG-state-conditioned `AAL3` connectivity profiles plus four-state omnibus/post-hoc outputs (`corr`, `PLV`, `wPLI`)
-- opt-in exploratory branches for direct EEG-SEEG state coupling and Yeo17 GFP-informed global coupling
+- opt-in exploratory branches for direct EEG-SEEG state coupling, subject-level and group-level SEEG global-field-state coupling, and Yeo17 GFP-informed global coupling
 
 The code is organized for recomputation from intermediate artifacts rather than notebook-only analysis.
 
@@ -62,7 +62,7 @@ What each command does:
 - `run-seeg-regions`: maps bipolar channels to same-region `AAL3` pairs, rescales them onto the shared `250 Hz` analysis grid, and computes reusable raw-scale `1-40 Hz` region time series.
 - `run-activity-effects`: computes EEG-state-conditioned `AAL3` activity profiles together with four-state omnibus and pairwise post-hoc summaries from the staged caches.
 - `run-connectivity-effects`: computes primary EEG-state-conditioned `AAL3` region connectivity profiles together with omnibus and pairwise post-hoc summaries from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
-- `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels, staged EEG GFP artifacts, and staged SEEG signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, `direct-state-coupling`, `lagged-state-coupling`, `transition-state-coupling`, `gfp-global-coupling`, `lagged-gfp-global-coupling`, `peak-gfp-global-coupling`, `gfp-controlled-microstate`, `gfp-controlled-transition`, or `all`.
+- `run-exploratory-coupling`: runs opt-in exploratory coupling analyses on top of the staged EEG labels, staged EEG GFP artifacts, and staged SEEG signals. Supported analyses are `event-activity`, `event-connectivity`, `windowed-coupling`, `transition-coupling`, `direct-state-coupling`, `lagged-state-coupling`, `transition-state-coupling`, `field-state-coupling`, `lagged-field-state-coupling`, `fine-lag-field-state-coupling`, `transition-field-state-coupling`, `field-state-to-eeg-switching`, `gfp-controlled-field-state-switching`, `field-state-archetypes`, `archetype-conditioned-eeg-topography`, `gfp-controlled-field-state-to-eeg-switching`, `gfp-global-coupling`, `lagged-gfp-global-coupling`, `peak-gfp-global-coupling`, `gfp-controlled-microstate`, `gfp-controlled-transition`, or `all`.
 - `render-reports`: writes figures and Excel exports from cached results.
 
 By default, EEG state staging uses the configured default template file `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow. If neither the override nor the configured default template exists, the EEG stage stops before labeling.
@@ -77,6 +77,15 @@ uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-coupli
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis direct-state-coupling --direct-backend pca-kmeans
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis lagged-state-coupling --max-lag-ms 200 --lag-step-ms 40
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-state-coupling --transition-window-sec 0.5
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis field-state-coupling --field-state-count 4
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis lagged-field-state-coupling --field-peak-metric spatial-std --field-normalization robust-zscore --max-lag-ms 200 --lag-step-ms 40
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis fine-lag-field-state-coupling --fine-lag-window-ms 40
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis transition-field-state-coupling --transition-window-sec 0.25
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis field-state-to-eeg-switching --transition-window-sec 0.25
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-controlled-field-state-switching --transition-window-sec 0.25
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis field-state-archetypes --field-archetype-space yeo17
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis archetype-conditioned-eeg-topography --field-archetype-space yeo17 --fine-lag-window-ms 40
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-controlled-field-state-to-eeg-switching --transition-window-sec 0.25
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-global-coupling --seeg-parcellation-name yeo17
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis lagged-gfp-global-coupling --seeg-parcellation-name yeo17 --global-metric all
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis peak-gfp-global-coupling --seeg-parcellation-name yeo17 --peak-window-sec 0.5
@@ -84,7 +93,7 @@ uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-controlled-mi
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis gfp-controlled-transition --seeg-parcellation-name yeo17 --transition-window-sec 0.25
 ```
 
-The exploratory stages share staged EEG event and transition tables. Direct state-coupling analyses additionally derive reduced-space SEEG state artifacts from the staged SEEG signals. GFP-informed global analyses currently target `Yeo17` staged SEEG signals and compare continuous EEG GFP against a predefined family of SEEG global metrics:
+The exploratory stages share staged EEG event and transition tables. Direct state-coupling analyses additionally derive reduced-space SEEG state artifacts from the staged SEEG signals. SEEG global-field-state analyses derive subject-level bipolar peak maps before region averaging, cluster them with polarity-invariant matching, and backfit continuous subject-level field-state labels. Those field-state labels are intentionally subject-local and should not be interpreted as a universal cross-subject template atlas. The `field-state-archetypes` branch projects those subject-level templates into a shared `Yeo17` comparison space, resolves sign orientation before matching, and writes group-level archetype summaries plus subject-to-archetype assignments. The `archetype-conditioned-eeg-topography` branch then aligns staged EEG sensor-space samples to those matched archetype labels, writes patient and group scalp-map panels, compares them against staged EEG microstate templates, and summarizes zero-lag preference plus native `4 ms` fine-lag synchrony without forcing one-to-one archetype-to-microstate assignments. The `fine-lag-field-state-coupling` branch keeps the shared `250 Hz` grid and characterizes near-zero synchrony at native `4 ms` resolution. The primary mechanistic switching follow-up is now `field-state-to-eeg-switching`, which treats SEEG field-state transitions as the leading event and reserves the older EEG-led field-state transition branch for secondary diagnostics. GFP-informed global analyses currently target `Yeo17` staged SEEG signals and compare continuous EEG GFP against a predefined family of SEEG global metrics:
 
 - primary: equal-weight `rms` over within-patient standardized Yeo17 core-network signals
 - sensitivity: `envelope-rms`
@@ -118,7 +127,7 @@ Artifacts are written under:
 - `artifacts/cache/coupling/` and `artifacts/cache/stats/`: also hold exploratory event-locked, windowed, transition, and direct state-coupling summaries under hashed `explore_*` branches
 - `artifacts/cache/seeg/`: includes staged `AAL3` region mappings, coverage tables, and per-patient `1-40 Hz` region time series used by downstream activity and connectivity stages
 - `artifacts/cache/eeg/`: includes the active EEG template copy `group_microstate_model_*.fif`, preprocessed FIF files, restored-channel tables, downstream microstate label tables, and reusable `gfp_trace_*` / `gfp_peaks_*` artifacts
-- `artifacts/cache/coupling/`: direct state-coupling runs also write reduced-space SEEG state features and state-label tables, while GFP-informed runs write branch-specific Yeo17 SEEG global traces, network-support tables, continuous coupling summaries, peak-centered trajectories, and GFP-controlled follow-up summaries
+- `artifacts/cache/coupling/`: direct state-coupling runs also write reduced-space SEEG state features and state-label tables, SEEG global-field-state runs write subject-level field traces, peak tables, peak maps, templates, continuous labels, occupancy/transition summaries, common-space archetype projections, archetype assignments, archetype-conditioned EEG scalp maps, archetype-to-template similarity tables, zero-lag EEG state preference summaries, native `4 ms` fine-lag summaries, and SEEG-led switching summaries, while GFP-informed runs write branch-specific Yeo17 SEEG global traces, network-support tables, continuous coupling summaries, peak-centered trajectories, and GFP-controlled follow-up summaries
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/figures/`: figures produced by a specific CLI command invocation
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/tables/`: Excel exports produced by a specific CLI command invocation
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/logs/`: per-command logs with command, timing, config hash, and output paths

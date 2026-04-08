@@ -1,21 +1,4 @@
-## Requirements
-
-### Requirement: The staged EEG command SHALL accept a template-file override
-The system SHALL allow the public EEG state generation stage to label against an active `pycrostates` `.fif` template selected from an explicit template-file override or, when none is supplied, from the configured default template path, without creating a separate top-level workflow command.
-
-#### Scenario: User inspects EEG stage help
-- **WHEN** a user requests help for the public EEG state generation stage
-- **THEN** the command SHALL expose a template-file input for supplying an external `pycrostates` cluster solution
-- **AND** the help text SHALL describe that the stage otherwise uses the configured default template file
-
-#### Scenario: User runs the staged EEG command with a template override
-- **WHEN** a user supplies an external template file to the public EEG state generation stage
-- **THEN** the staged workflow SHALL use that template file for EEG labeling while keeping downstream cache locations compatible with the rest of the public workflow
-
-#### Scenario: User runs the staged EEG command without a template override
-- **WHEN** a user runs the public EEG state generation stage without `--template-fif`
-- **THEN** the staged workflow SHALL use the configured default template file for EEG labeling
-- **AND** the stage SHALL stop before labeling with a clear error if that configured template file is unavailable
+## MODIFIED Requirements
 
 ### Requirement: Exploratory coupling analyses SHALL reuse staged upstream artifacts
 The orchestration layer SHALL allow exploratory coupling analyses to reuse the existing staged index, EEG microstate labels, staged EEG GFP artifacts, staged EEG sensor-space artifacts, and the branch-specific SEEG exploratory inputs required by each method, including staged SEEG region signal caches for region- and network-based methods, subject-level SEEG field-state artifacts for electrode-space field-state methods, common-space field-state projection artifacts for group archetype methods, and group archetype assignments for archetype-conditioned EEG topography methods, without recomputing those reusable upstream artifacts.
@@ -50,21 +33,6 @@ The system SHALL expose a public command surface centered on the focused staged 
 - **WHEN** the streamlined CLI is released with the region-oriented command surface, direct-coupling exploratory extensions, GFP-informed global exploratory extensions, and SEEG global-field-state exploratory extensions
 - **THEN** legacy public commands or maintained command aliases for HFA staging, HFA coupling, the old SEEG-microstate cross-modal branch, and `run-seeg-networks` SHALL not define the public workflow
 
-### Requirement: Each public stage SHALL persist reusable intermediate artifacts
-The system SHALL persist stage outputs so users can rerun downstream analysis steps without recomputing upstream stages, SHALL keep those reusable artifacts distinct by selected analysis state, and SHALL allow exploratory direct state-coupling reruns to reuse matching upstream staged artifacts.
-
-#### Scenario: Upstream EEG state artifacts already exist
-- **WHEN** a downstream activity or connectivity stage runs after EEG state artifacts were already generated for the selected analysis state
-- **THEN** the downstream stage SHALL reuse the cached EEG state artifacts rather than recomputing them
-
-#### Scenario: User debugs a downstream method change
-- **WHEN** a user reruns connectivity effects after changing only the connectivity method or downstream statistics
-- **THEN** the workflow SHALL allow the user to reuse the existing index, EEG state, and staged `AAL3` region caches for the same selected analysis state
-
-#### Scenario: User reruns a direct state-coupling analysis after changing only direct-branch parameters
-- **WHEN** a user reruns a direct EEG-SEEG state-coupling analysis after the required index, EEG, and staged SEEG signal artifacts already exist for the selected analysis state
-- **THEN** the workflow SHALL reuse the matching upstream staged inputs and recompute only the direct-coupling branch outputs whose cache identity changed
-
 ### Requirement: Reports SHALL be exported from staged analysis results
 The system SHALL export figures and table outputs from the staged workflow into report directories without requiring users to manually transform cached results, SHALL render EEG microstate figures from the native staged `pycrostates` model artifact when it is available, SHALL export focused-workflow omnibus and post-hoc report artifacts for the main activity and connectivity stages when those caches exist, and SHALL export maintained exploratory region-signal, direct state-coupling, GFP-informed global-coupling, SEEG global-field-state, and archetype-conditioned EEG topography reports whenever the corresponding exploratory caches exist for the selected analysis state.
 
@@ -73,7 +41,7 @@ The system SHALL export figures and table outputs from the staged workflow into 
 - **THEN** the system SHALL write an EEG microstate topographic figure derived from the staged `pycrostates` model artifact together with the available `AAL3` activity omnibus, activity post-hoc, connectivity omnibus, and connectivity post-hoc figure and table outputs
 
 #### Scenario: Exploratory caches exist when reports are rendered
-- **WHEN** the report stage runs after one or more exploratory region-signal, direct state-coupling, GFP-informed global-coupling, or SEEG global-field-state analyses have already written their caches for the selected analysis state
+- **WHEN** the report stage runs after one or more exploratory region-signal, direct state-coupling, GFP-informed global-coupling, SEEG global-field-state, or archetype-conditioned EEG topography analyses have already written their caches for the selected analysis state
 - **THEN** the report stage SHALL export the corresponding exploratory figures and tables in addition to the standard main-workflow omnibus and post-hoc reports
 
 #### Scenario: Field-state archetype, fine-lag, SEEG-led switching, or archetype-conditioned EEG caches exist when reports are rendered
