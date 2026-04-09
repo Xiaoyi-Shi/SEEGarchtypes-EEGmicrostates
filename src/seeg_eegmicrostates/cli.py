@@ -29,7 +29,7 @@ from seeg_eegmicrostates.coupling import (
 )
 from seeg_eegmicrostates.workflows import (
     build_index_artifacts,
-    render_reports,
+    export_paper_tables,
     run_activity_effects_stage,
     run_connectivity_effects_stage,
     run_eeg_states_stage,
@@ -182,7 +182,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Minimum subject support for exploratory group summaries; defaults to the config threshold.",
     )
-    subparsers.add_parser("render-reports", parents=common_parents, help="Render figures and Excel tables from staged analysis outputs.")
+    subparsers.add_parser(
+        "export-paper-tables",
+        parents=common_parents,
+        help="Export categorized manuscript tables and manifests from staged analysis outputs.",
+        description="Export categorized manuscript tables and manifests from staged analysis outputs without rendering figures in Python.",
+    )
     return parser
 
 
@@ -266,8 +271,8 @@ def main(argv: list[str] | None = None) -> None:
                 global_surrogates=args.global_surrogates,
                 min_subjects=args.min_subjects,
             )
-        elif args.command == "render-reports":
-            outputs = render_reports(cfg)
+        elif args.command == "export-paper-tables":
+            outputs = export_paper_tables(cfg)
         else:
             raise ValueError(f"Unsupported command: {args.command}")
     except Exception:

@@ -81,5 +81,11 @@ def write_excel_dataframe(df: pd.DataFrame, path: Path, *, sheet_name: str = "re
     return path
 
 
+def write_csv_dataframe(df: pd.DataFrame, path: Path) -> Path:
+    ensure_directory(path.parent)
+    df.to_csv(path, index=False)
+    return path
+
+
 def read_dataframe(path: Path) -> pd.DataFrame:
     return pd.read_parquet(path)

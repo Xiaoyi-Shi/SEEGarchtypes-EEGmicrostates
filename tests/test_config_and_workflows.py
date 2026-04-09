@@ -8,7 +8,7 @@ from seeg_eegmicrostates._utils import write_dataframe
 from seeg_eegmicrostates.config import AnalysisConfig, YEO7_PARCELLATION_COLUMN, YEO17_PARCELLATION_COLUMN
 from seeg_eegmicrostates.workflows.pipelines import (
     _exploratory_branch,
-    render_reports,
+    export_paper_tables,
     run_activity_effects_stage,
     run_exploratory_coupling_stage,
 )
@@ -31,7 +31,7 @@ def test_default_eeg_template_path_tracks_artifact_root(tmp_path: Path) -> None:
 def test_run_specific_report_and_log_paths_live_under_timestamped_run_directory(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
     report_path = cfg.report_path("activity_effects", ext="png", branch="band_1_40_activity")
-    log_path = cfg.log_path("render-reports")
+    log_path = cfg.log_path("export-paper-tables")
     assert report_path == (
         tmp_path
         / "artifacts"
@@ -47,7 +47,7 @@ def test_run_specific_report_and_log_paths_live_under_timestamped_run_directory(
         / "runs"
         / "20260406_123456"
         / "logs"
-        / f"render_reports_{cfg.runtime_hash}.log"
+        / f"export_paper_tables_{cfg.runtime_hash}.log"
     )
     assert not (cfg.reports_root / "qc").exists()
 
@@ -263,7 +263,7 @@ def test_render_reports_ignores_legacy_main_activity_and_connectivity_outputs(tm
         cfg.cache_path("stats", "group_connectivity_posthoc", ext="parquet", branch="band_1_40_plv"),
     )
 
-    outputs = render_reports(cfg)
+    outputs = export_paper_tables(cfg)
     assert outputs == {}
 
 
@@ -280,7 +280,7 @@ def test_render_reports_does_not_promote_region_coverage_to_paper_bundle(tmp_pat
         ),
         coverage_path,
     )
-    outputs = render_reports(cfg)
+    outputs = export_paper_tables(cfg)
     assert outputs == {}
 
 
@@ -663,7 +663,7 @@ def test_render_reports_hides_retired_region_signal_exploratory_outputs(tmp_path
         cfg.cache_path("stats", "group_transition_coupling", ext="parquet", branch=transition_branch),
     )
 
-    outputs = render_reports(cfg)
+    outputs = export_paper_tables(cfg)
     assert outputs == {}
 
 
@@ -805,7 +805,7 @@ def test_render_reports_hides_legacy_direct_state_outputs(tmp_path: Path) -> Non
         cfg.cache_path("stats", "group_transition_state_coupling", ext="parquet", branch=transition_state_branch),
     )
 
-    outputs = render_reports(cfg)
+    outputs = export_paper_tables(cfg)
     assert outputs == {}
 
 
@@ -1026,13 +1026,11 @@ def test_render_reports_discovers_gfp_global_outputs(tmp_path: Path) -> None:
         cfg.cache_path("stats", "group_gfp_controlled_transition", ext="parquet", branch=transition_branch),
     )
 
-    outputs = render_reports(cfg)
+    outputs = export_paper_tables(cfg)
     output_paths = list(outputs.values())
     assert outputs["paper_manifest_csv"].exists()
     assert outputs["paper_manifest_excel"].exists()
-    assert any(path.parent.name == "supplementary_figures" and "gfp_global_coupling" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "peak_gfp_global_coupling" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "gfp_controlled_microstate" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "gfp_controlled_transition" in path.name for path in output_paths)
+    assert not any(path.parent.name == "supplementary_figures" for path in output_paths)
     assert any(path.parent.name == "supplementary_tables" and "gfp_global_coupling" in path.name for path in output_paths)
     assert any(path.parent.name == "supplementary_tables" and "gfp_controlled_transition" in path.name for path in output_paths)
+    assert any(path.suffix == ".csv" and path.parent.name == "supplementary_tables" for path in output_paths)

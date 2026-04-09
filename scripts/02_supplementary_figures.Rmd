@@ -1,0 +1,121 @@
+---
+title: "SEEG-EEG Supplementary Figures"
+output: html_document
+params:
+  report_root: ""
+  manifest_path: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+manifest <- read_manifest(report_root = params$report_root, manifest_path = params$manifest_path)
+report_root <- dirname(dirname(resolve_manifest(report_root = params$report_root, manifest_path = params$manifest_path)))
+figure_dir <- ensure_output_dir(file.path(report_root, "supplementary_figures"))
+```
+
+```{r field-state-transitions}
+transition_df <- read_bundle_table(manifest, "subject_field_state_transition_profiles", bundle = "supplementary")
+p <- plot_state_heatmap(
+  transition_df,
+  x = "to_state",
+  y = "from_state",
+  fill = "transition_probability",
+  title = "Supplementary Figure 1. Subject-level field-state transition probabilities",
+  midpoint = median(transition_df$transition_probability, na.rm = TRUE)
+)
+save_panel(p, file.path(figure_dir, "supplementary_figure_01_field_state_transition_profiles.png"))
+```
+
+```{r field-state-subject-peaks}
+peak_df <- read_bundle_table(manifest, "field_state_fine_lag_subject_peaks", bundle = "supplementary")
+peak_long <- peak_df %>%
+  select(patient_id, peak_lag_ms, peak_effect_mean_diff, peak_width_ms) %>%
+  pivot_longer(cols = -patient_id, names_to = "summary_kind", values_to = "summary_value")
+p <- plot_state_heatmap(
+  peak_long,
+  x = "summary_kind",
+  y = "patient_id",
+  fill = "summary_value",
+  title = "Supplementary Figure 2. Field-state fine-lag subject peaks",
+  midpoint = 0
+)
+save_panel(p, file.path(figure_dir, "supplementary_figure_02_field_state_subject_peaks.png"), width = 8, height = 6)
+```
+
+```{r archetype-support}
+assignment_df <- read_bundle_table(manifest, "field_state_archetype_assignments", bundle = "supplementary")
+support_df <- assignment_df %>%
+  group_by(assigned_archetype) %>%
+  summarise(n_subjects = n_distinct(patient_id), mean_similarity = mean(assignment_similarity, na.rm = TRUE), .groups = "drop") %>%
+  rename(archetype = assigned_archetype)
+p <- plot_support_summary(support_df, "Supplementary Figure 3. Archetype support and assignment similarity")
+save_panel(p, file.path(figure_dir, "supplementary_figure_03_archetype_support.png"))
+```
+
+```{r conditioned-eeg-maps}
+map_df <- read_bundle_table(manifest, "archetype_conditioned_eeg_maps", bundle = "supplementary")
+p <- plot_channel_heatmap(map_df, "Supplementary Figure 4. Archetype-conditioned EEG channel maps")
+save_panel(p, file.path(figure_dir, "supplementary_figure_04_archetype_conditioned_eeg_maps.png"), width = 10, height = 5.5)
+```
+
+```{r archetype-state-preference}
+preference_df <- read_bundle_table(manifest, "archetype_eeg_state_preference", bundle = "supplementary")
+p <- plot_state_heatmap(
+  preference_df,
+  x = "microstate",
+  y = "assigned_archetype",
+  fill = "mean_effect",
+  title = "Supplementary Figure 5. Archetype-conditioned EEG state preference",
+  midpoint = 0
+)
+save_panel(p, file.path(figure_dir, "supplementary_figure_05_archetype_eeg_state_preference.png"))
+```
+
+```{r archetype-switching}
+switch_df <- read_bundle_table(manifest, "archetype_to_eeg_switching", bundle = "supplementary")
+switch_plot_df <- switch_df %>%
+  filter(response_kind == "any-switch" | is.na(response_kind))
+p <- plot_state_heatmap(
+  switch_plot_df,
+  x = "to_state",
+  y = "from_state",
+  fill = "mean_effect",
+  title = "Supplementary Figure 6. SEEG archetype to EEG switching",
+  midpoint = 0
+)
+save_panel(p, file.path(figure_dir, "supplementary_figure_06_archetype_to_eeg_switching.png"))
+```
+
+```{r gfp-curves}
+gfp_df <- read_bundle_table(manifest, "gfp_global_coupling", bundle = "supplementary")
+lagged_gfp_df <- read_bundle_table(manifest, "lagged_gfp_global_coupling", bundle = "supplementary")
+peak_gfp_df <- read_bundle_table(manifest, "peak_gfp_global_coupling", bundle = "supplementary")
+p1 <- plot_lag_curve(gfp_df, "Supplementary Figure 7A. GFP-global coupling")
+p2 <- plot_lag_curve(lagged_gfp_df, "Supplementary Figure 7B. Lagged GFP-global coupling")
+p3 <- plot_lag_curve(peak_gfp_df, "Supplementary Figure 7C. Peak-centered GFP-global coupling", x_col = "offset_ms")
+combined <- (p1 / p2 / p3) + plot_layout(guides = "collect")
+save_panel(combined, file.path(figure_dir, "supplementary_figure_07_gfp_global_panels.png"), width = 8, height = 12)
+```
+
+```{r gfp-controlled}
+microstate_df <- read_bundle_table(manifest, "gfp_controlled_microstate", bundle = "supplementary")
+transition_df <- read_bundle_table(manifest, "gfp_controlled_transition", bundle = "supplementary")
+p1 <- plot_state_heatmap(
+  microstate_df %>% pivot_longer(cols = starts_with("mean_state_"), names_to = "microstate", values_to = "value"),
+  x = "microstate",
+  y = "global_metric_label",
+  fill = "value",
+  title = "Supplementary Figure 8A. GFP-controlled microstate means",
+  midpoint = 0
+)
+p2 <- plot_state_heatmap(
+  transition_df,
+  x = "to_state",
+  y = "from_state",
+  fill = "mean_effect",
+  title = "Supplementary Figure 8B. GFP-controlled transition effects",
+  midpoint = 0
+)
+save_panel(p1 + p2, file.path(figure_dir, "supplementary_figure_08_gfp_controlled_followups.png"), width = 12, height = 5.5)
+```

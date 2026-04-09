@@ -1427,21 +1427,18 @@ def test_render_reports_discovers_field_state_outputs(tmp_path: Path) -> None:
         cfg.cache_path("stats", "group_gfp_controlled_field_state_to_eeg_switching", ext="parquet", branch=gfp_seeg_led_branch),
     )
 
-    outputs = pipelines.render_reports(cfg)
+    outputs = pipelines.export_paper_tables(cfg)
     output_paths = list(outputs.values())
     assert outputs["paper_manifest_csv"].exists()
     assert outputs["paper_manifest_excel"].exists()
-    assert any(path.parent.name == "main_figures" and "subject_field_state_templates" in path.name for path in output_paths)
     assert any(path.parent.name == "main_tables" and "subject_field_state_profiles" in path.name for path in output_paths)
-    assert any(path.parent.name == "main_figures" and "field_state_synchronous_coupling" in path.name for path in output_paths)
-    assert any(path.parent.name == "main_figures" and "field_state_fine_lag_synchrony" in path.name for path in output_paths)
-    assert any(path.parent.name == "main_figures" and "group_field_state_archetypes" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "field_state_archetype_assignments" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "field_state_to_eeg_switching" in path.name for path in output_paths)
-    assert any(
-        path.parent.name == "supplementary_figures" and "gfp_controlled_field_state_to_eeg_switching" in path.name
-        for path in output_paths
-    )
+    assert any(path.parent.name == "main_tables" and "field_state_synchronous_coupling" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_tables" and "field_state_fine_lag_synchrony" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_tables" and "group_field_state_archetypes" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "field_state_archetype_assignments" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "field_state_to_eeg_switching" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "gfp_controlled_field_state_to_eeg_switching" in path.name for path in output_paths)
+    assert not any(path.parent.name.endswith("figures") for path in output_paths)
     assert not any("gfp_controlled_field_state_switching" in path.name for path in output_paths)
 
 
@@ -1622,11 +1619,11 @@ def test_render_reports_discovers_archetype_conditioned_eeg_topography_outputs(t
         cfg.cache_path("stats", "group_archetype_to_eeg_switching", ext="parquet", branch=branch),
     )
 
-    outputs = pipelines.render_reports(cfg)
+    outputs = pipelines.export_paper_tables(cfg)
     output_paths = list(outputs.values())
-    assert any(path.parent.name == "main_figures" and "archetype_conditioned_eeg_topographies" in path.name for path in output_paths)
+    assert not any(path.parent.name.endswith("figures") for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "archetype_conditioned_eeg_maps" in path.name for path in output_paths)
     assert any(path.parent.name == "main_tables" and "archetype_eeg_template_similarity" in path.name for path in output_paths)
-    assert any(path.parent.name == "main_figures" and "archetype_eeg_fine_lag_synchrony" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "archetype_eeg_template_similarity" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "archetype_eeg_state_preference" in path.name for path in output_paths)
-    assert any(path.parent.name == "supplementary_figures" and "archetype_to_eeg_switching" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_tables" and "archetype_eeg_fine_lag_synchrony" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "archetype_eeg_state_preference" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "archetype_to_eeg_switching" in path.name for path in output_paths)

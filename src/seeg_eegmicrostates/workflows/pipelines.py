@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from seeg_eegmicrostates._utils import config_hash, read_dataframe, write_dataframe, write_excel_dataframe
+from seeg_eegmicrostates._utils import config_hash, read_dataframe, write_csv_dataframe, write_dataframe, write_excel_dataframe
 from seeg_eegmicrostates.config import AnalysisConfig
 from seeg_eegmicrostates.coupling import (
     DEFAULT_FINE_FIELD_LAG_WINDOW_MS,
@@ -95,22 +95,6 @@ from seeg_eegmicrostates.stats import (
     run_group_profile_omnibus_statistics,
     run_group_profile_posthoc_statistics,
     run_group_scalar_statistics,
-)
-from seeg_eegmicrostates.viz import (
-    plot_connectivity_effect_matrices,
-    plot_connectivity_omnibus_matrix,
-    plot_connectivity_posthoc_matrices,
-    plot_coverage_summary,
-    plot_effect_curve,
-    plot_direct_coupling_lag_curve,
-    plot_eeg_topography_panels,
-    plot_group_effects_heatmap,
-    plot_group_metric_heatmap,
-    plot_microstate_templates,
-    plot_subject_state_profile_heatmap,
-    plot_subject_template_panels,
-    plot_state_transition_matrix,
-    plot_transition_effect_heatmap,
 )
 from seeg_eegmicrostates.config import (
     SEEG_PARCELLATION_COLUMN,
@@ -549,11 +533,49 @@ def _append_manifest_row(
     family: str,
     label: str,
     analysis_branch: str,
-    output_path: Path,
+    output_csv_path: Path | None,
+    output_xlsx_path: Path | None,
     source_paths: tuple[Path, ...],
+    dataframe: pd.DataFrame | None = None,
 ) -> None:
+    min_subject_support = None
+    max_subject_support = None
+    if dataframe is not None and "n_subjects" in dataframe.columns and not dataframe.empty:
+        numeric_support = pd.to_numeric(dataframe["n_subjects"], errors="coerce").dropna()
+        if not numeric_support.empty:
+            min_subject_support = int(numeric_support.min())
+            max_subject_support = int(numeric_support.max())
+
+    parameter_columns = (
+        "peak_metric",
+        "normalization",
+        "n_states",
+        "min_duration_ms",
+        "comparison_space",
+        "global_metric_label",
+        "metric_definition",
+        "weighting_strategy",
+        "network_scope",
+    )
+    parameter_summary = None
+    if dataframe is not None and not dataframe.empty:
+        fragments: list[str] = []
+        for column in parameter_columns:
+            if column not in dataframe.columns:
+                continue
+            values = sorted({str(value) for value in dataframe[column].dropna().tolist()})
+            if not values:
+                continue
+            preview = ",".join(values[:4])
+            if len(values) > 4:
+                preview = f"{preview},..."
+            fragments.append(f"{column}={preview}")
+        if fragments:
+            parameter_summary = "; ".join(fragments)
+
     manifest_rows.append(
         {
+            "run_id": cfg.run_timestamp,
             "analysis_state": cfg.analysis_state,
             "runtime_hash": cfg.runtime_hash,
             "bundle": bundle,
@@ -562,8 +584,15 @@ def _append_manifest_row(
             "family": family,
             "label": label,
             "analysis_branch": analysis_branch,
-            "output_path": str(output_path),
+            "output_csv_path": str(output_csv_path) if output_csv_path is not None else "",
+            "output_xlsx_path": str(output_xlsx_path) if output_xlsx_path is not None else "",
             "source_caches": ";".join(str(path) for path in source_paths),
+            "row_count": 0 if dataframe is None else int(len(dataframe)),
+            "column_count": 0 if dataframe is None else int(len(dataframe.columns)),
+            "subject_support_column": "n_subjects" if dataframe is not None and "n_subjects" in dataframe.columns else "",
+            "min_subject_support": min_subject_support,
+            "max_subject_support": max_subject_support,
+            "parameter_summary": parameter_summary or "",
         }
     )
 
@@ -578,10 +607,13 @@ def _write_manuscript_table(
     label: str,
     analysis_branch: str,
     source_paths: tuple[Path, ...],
-) -> Path:
+) -> tuple[Path, Path]:
     stem = _paper_asset_stem(bundle=bundle, kind="table", order=order, label=label, cfg=cfg)
-    path = _paper_asset_path(cfg, stem=stem, ext="xlsx", bundle=bundle, kind="table")
-    return write_excel_dataframe(dataframe, path)
+    xlsx_path = _paper_asset_path(cfg, stem=stem, ext="xlsx", bundle=bundle, kind="table")
+    csv_path = _paper_asset_path(cfg, stem=stem, ext="csv", bundle=bundle, kind="table")
+    write_excel_dataframe(dataframe, xlsx_path)
+    write_csv_dataframe(dataframe, csv_path)
+    return csv_path, xlsx_path
 
 
 def _write_manuscript_manifest(cfg: AnalysisConfig, manifest_rows: list[dict[str, object]]) -> dict[str, Path]:
@@ -627,24 +659,9 @@ def _emit_manuscript_figure(
     source_paths: tuple[Path, ...],
     render_fn,
 ) -> Path:
-    order = _next_paper_order(counters, bundle=bundle, kind="figure")
-    stem = _paper_asset_stem(bundle=bundle, kind="figure", order=order, label=label, cfg=cfg)
-    output_path = _paper_asset_path(cfg, stem=stem, ext="png", bundle=bundle, kind="figure")
-    figure_path = render_fn(output_path)
-    outputs[f"{bundle}_figure_{cfg.branch_name(label)}"] = figure_path
-    _append_manifest_row(
-        manifest_rows,
-        cfg=cfg,
-        bundle=bundle,
-        kind="figure",
-        order=order,
-        family=family,
-        label=label,
-        analysis_branch=analysis_branch,
-        output_path=figure_path,
-        source_paths=source_paths,
-    )
-    return figure_path
+    _ = (cfg, outputs, manifest_rows, counters, bundle, family, label, analysis_branch, source_paths, render_fn)
+    stem = _paper_asset_stem(bundle=bundle, kind="figure", order=1, label=label, cfg=cfg)
+    return _paper_asset_path(cfg, stem=stem, ext="png", bundle=bundle, kind="figure")
 
 
 def _emit_manuscript_table(
@@ -661,7 +678,7 @@ def _emit_manuscript_table(
     source_paths: tuple[Path, ...],
 ) -> Path:
     order = _next_paper_order(counters, bundle=bundle, kind="table")
-    table_path = _write_manuscript_table(
+    csv_path, xlsx_path = _write_manuscript_table(
         cfg,
         dataframe=dataframe,
         bundle=bundle,
@@ -671,7 +688,8 @@ def _emit_manuscript_table(
         analysis_branch=analysis_branch,
         source_paths=source_paths,
     )
-    outputs[f"{bundle}_table_{cfg.branch_name(label)}"] = table_path
+    outputs[f"{bundle}_table_csv_{cfg.branch_name(label)}"] = csv_path
+    outputs[f"{bundle}_table_xlsx_{cfg.branch_name(label)}"] = xlsx_path
     _append_manifest_row(
         manifest_rows,
         cfg=cfg,
@@ -681,10 +699,12 @@ def _emit_manuscript_table(
         family=family,
         label=label,
         analysis_branch=analysis_branch,
-        output_path=table_path,
+        output_csv_path=csv_path,
+        output_xlsx_path=xlsx_path,
         source_paths=source_paths,
+        dataframe=dataframe,
     )
-    return table_path
+    return xlsx_path
 
 
 def _transition_figure_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -5956,5 +5976,9 @@ def _render_reports_legacy(cfg: AnalysisConfig) -> dict[str, Path]:
     return outputs
 
 
-def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
+def export_paper_tables(cfg: AnalysisConfig) -> dict[str, Path]:
     return _render_manuscript_reports(cfg)
+
+
+def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
+    return export_paper_tables(cfg)

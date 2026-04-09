@@ -17,7 +17,7 @@ from seeg_eegmicrostates.eeg.microstates import (
     save_microstate_model,
     validate_microstate_model_channels,
 )
-from seeg_eegmicrostates.workflows import render_reports, run_eeg_states_stage
+from seeg_eegmicrostates.workflows import export_paper_tables, run_eeg_states_stage
 from seeg_eegmicrostates.workflows import pipelines
 
 
@@ -197,7 +197,7 @@ def test_render_reports_does_not_export_standalone_eeg_microstate_templates(tmp_
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
     model = _fit_model(_make_raw(cfg), cfg)
     save_microstate_model(model, cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch="band_1_40"))
-    outputs = render_reports(cfg)
+    outputs = export_paper_tables(cfg)
     assert outputs == {}
 
 

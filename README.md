@@ -42,7 +42,9 @@ uv run seeg-eegmicrostates run-seeg-regions
 uv run seeg-eegmicrostates run-activity-effects
 uv run seeg-eegmicrostates run-connectivity-effects --method all
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis all
-uv run seeg-eegmicrostates render-reports
+uv run seeg-eegmicrostates export-paper-tables
+Rscript -e "rmarkdown::render('scripts/01_main_figures.Rmd', params=list(report_root='artifacts/runs/<run-id>/reports'))"
+Rscript -e "rmarkdown::render('scripts/02_supplementary_figures.Rmd', params=list(report_root='artifacts/runs/<run-id>/reports'))"
 ```
 
 If you want multiple staged commands to share one run folder, pass the same `--run-id` to each command:
@@ -53,7 +55,7 @@ uv run seeg-eegmicrostates run-eeg-states --run-id 20260406_230000
 uv run seeg-eegmicrostates run-seeg-regions --run-id 20260406_230000
 uv run seeg-eegmicrostates run-activity-effects --run-id 20260406_230000
 uv run seeg-eegmicrostates run-connectivity-effects --method all --run-id 20260406_230000
-uv run seeg-eegmicrostates render-reports --run-id 20260406_230000
+uv run seeg-eegmicrostates export-paper-tables --run-id 20260406_230000
 ```
 
 What each command does:
@@ -64,7 +66,7 @@ What each command does:
 - `run-activity-effects`: computes EEG-state-conditioned `AAL3` activity profiles together with four-state omnibus and pairwise post-hoc summaries from the staged caches.
 - `run-connectivity-effects`: computes primary EEG-state-conditioned `AAL3` region connectivity profiles together with omnibus and pairwise post-hoc summaries from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
 - `run-exploratory-coupling`: runs the maintained paper-focused SEEG field-state workflow on top of the staged EEG labels, EEG GFP artifacts, and staged SEEG signals. Maintained analyses are `field-state-coupling`, `fine-lag-field-state-coupling`, `field-state-archetypes`, `archetype-conditioned-eeg-topography`, plus supplementary `gfp-global-coupling`, `lagged-gfp-global-coupling`, `peak-gfp-global-coupling`, `gfp-controlled-microstate`, `gfp-controlled-transition`, `field-state-to-eeg-switching`, `gfp-controlled-field-state-to-eeg-switching`, or `all`.
-- `render-reports`: writes manuscript-ready main and supplementary figure/table bundles from cached results.
+- `export-paper-tables`: writes categorized manuscript-facing CSV/XLSX tables plus manifests from cached results. Final figure rendering is handled by the maintained R Markdown scripts under `scripts/`.
 
 By default, EEG state staging uses the configured default template file `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow. If neither the override nor the configured default template exists, the EEG stage stops before labeling.
 
@@ -107,7 +109,7 @@ uv run seeg-eegmicrostates run-eeg-states
 uv run seeg-eegmicrostates run-seeg-regions
 uv run seeg-eegmicrostates run-activity-effects
 uv run seeg-eegmicrostates run-connectivity-effects --method all
-uv run seeg-eegmicrostates render-reports
+uv run seeg-eegmicrostates export-paper-tables
 ```
 
 ## Outputs
@@ -119,9 +121,9 @@ Artifacts are written under:
 - `artifacts/cache/seeg/`: includes staged `AAL3` region mappings, coverage tables, and per-patient `1-40 Hz` region time series used by downstream activity and connectivity stages
 - `artifacts/cache/eeg/`: includes the active EEG template copy `group_microstate_model_*.fif`, preprocessed FIF files, restored-channel tables, downstream microstate label tables, and reusable `gfp_trace_*` / `gfp_peaks_*` artifacts
 - `artifacts/cache/coupling/`: SEEG global-field-state runs write subject-level field traces, peak tables, peak maps, templates, continuous labels, occupancy/transition summaries, common-space archetype projections, archetype assignments, archetype-conditioned EEG scalp maps, archetype-to-template similarity tables, preference summaries, native `4 ms` synchrony summaries, and SEEG-led switching summaries, while GFP-informed runs write branch-specific Yeo17 SEEG global traces, network-support tables, continuous coupling summaries, peak-centered trajectories, and GFP-controlled follow-up summaries
-- `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/main_figures/`: manuscript-ready main figures
+- `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/main_figures/`: manuscript-ready main figures rendered by `scripts/01_main_figures.Rmd`
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/main_tables/`: manuscript-ready main tables
-- `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/supplementary_figures/`: manuscript-ready supplementary figures
+- `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/supplementary_figures/`: manuscript-ready supplementary figures rendered by `scripts/02_supplementary_figures.Rmd`
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/supplementary_tables/`: manuscript-ready supplementary tables
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/reports/manifests/`: manifest files that map manuscript assets back to staged branches and cache artifacts
 - `artifacts/runs/<YYYYMMDD_HHMMSS>/logs/`: per-command logs with command, timing, config hash, and output paths
@@ -131,13 +133,15 @@ If you do not pass `--run-id`, each CLI command gets its own timestamped run dir
 Run directories are created lazily:
 
 - commands that only touch reusable cache outputs typically create `logs/` but no `reports/`
-- `reports/main_figures/`, `reports/main_tables/`, `reports/supplementary_figures/`, and `reports/supplementary_tables/` only appear when a command actually writes manuscript-facing outputs
+- `export-paper-tables` creates `reports/main_tables/`, `reports/supplementary_tables/`, and `reports/manifests/`
+- the R Markdown figure step creates `reports/main_figures/` and `reports/supplementary_figures/`
 - there is no precreated `reports/qc/` placeholder anymore
 
 In practice:
 
 - `build-index`, `run-eeg-states`, `run-seeg-regions`, `run-activity-effects`, and `run-connectivity-effects` primarily update `artifacts/cache/` and write a command log
-- `render-reports` reads the existing caches and emits the user-facing figures and Excel tables under its own run directory
+- `export-paper-tables` reads the existing caches and emits categorized CSV/XLSX tables plus manifests under its run directory
+- `scripts/01_main_figures.Rmd` and `scripts/02_supplementary_figures.Rmd` read those standardized exports and write the final paper figures
 
 Cache filenames are branch-specific and include a config hash so parameter changes do not silently overwrite earlier runs.
 

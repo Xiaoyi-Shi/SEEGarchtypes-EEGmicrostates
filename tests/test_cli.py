@@ -20,7 +20,7 @@ def test_cli_exposes_streamlined_staged_commands() -> None:
         "run-activity-effects",
         "run-connectivity-effects",
         "run-exploratory-coupling",
-        "render-reports",
+        "export-paper-tables",
     }
 
 
@@ -42,6 +42,7 @@ def test_cli_describes_aal3_region_outputs() -> None:
     build_index_help = action.choices["build-index"].format_help()
     eeg_help = action.choices["run-eeg-states"].format_help()
     exploratory_help = action.choices["run-exploratory-coupling"].format_help()
+    export_help = action.choices["export-paper-tables"].format_help()
     assert "AAL3" in top_level_help
     assert "ModK.fif" in eeg_help
     assert "configured default" in eeg_help
@@ -60,6 +61,7 @@ def test_cli_describes_aal3_region_outputs() -> None:
     assert "gfp-controlled-transition" in exploratory_help
     assert "field-state-to-eeg-switching" in exploratory_help
     assert "gfp-controlled-field-state-to-eeg-switching" in exploratory_help
+    assert "categorized manuscript tables" in export_help
     assert "direct-state-coupling" not in exploratory_help
     assert "event-connectivity" not in exploratory_help
     assert "--event-window-sec" not in exploratory_help

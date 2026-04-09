@@ -1,0 +1,63 @@
+---
+title: "SEEG-EEG Main Figures"
+output: html_document
+params:
+  report_root: ""
+  manifest_path: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+manifest <- read_manifest(report_root = params$report_root, manifest_path = params$manifest_path)
+report_root <- dirname(dirname(resolve_manifest(report_root = params$report_root, manifest_path = params$manifest_path)))
+figure_dir <- ensure_output_dir(file.path(report_root, "main_figures"))
+```
+
+```{r field-state-profiles}
+profiles <- read_bundle_table(manifest, "subject_field_state_profiles", bundle = "main")
+plot_df <- profiles %>%
+  mutate(field_state = factor(field_state))
+p <- ggplot(plot_df, aes(x = field_state, y = occupancy)) +
+  geom_boxplot(fill = "#8fbcd4", color = "#234b5e") +
+  labs(title = "Figure 1. Subject-level SEEG field-state occupancy", x = "Field state", y = "Occupancy") +
+  paper_theme()
+save_panel(p, file.path(figure_dir, "figure_01_subject_field_state_profiles.png"), width = 7, height = 5)
+```
+
+```{r field-state-sync}
+sync_df <- read_bundle_table(manifest, "field_state_synchronous_coupling", bundle = "main")
+p <- plot_lag_curve(sync_df, "Figure 2. EEG microstate and SEEG field-state synchrony")
+save_panel(p, file.path(figure_dir, "figure_02_field_state_synchronous_coupling.png"))
+```
+
+```{r field-state-fine-lag}
+lag_df <- read_bundle_table(manifest, "field_state_fine_lag_synchrony", bundle = "main")
+p <- plot_lag_curve(lag_df, "Figure 3. Fine-lag EEG-SEEG field-state synchrony")
+save_panel(p, file.path(figure_dir, "figure_03_field_state_fine_lag_synchrony.png"))
+```
+
+```{r archetype-loadings}
+archetype_df <- read_bundle_table(manifest, "group_field_state_archetypes", bundle = "main")
+p <- plot_archetype_loadings(archetype_df, "Figure 4. Group SEEG field-state archetype loadings")
+save_panel(p, file.path(figure_dir, "figure_04_group_field_state_archetypes.png"), width = 10, height = 5.5)
+```
+
+```{r archetype-template-similarity}
+similarity_df <- read_bundle_table(manifest, "archetype_eeg_template_similarity", bundle = "main")
+p <- plot_state_heatmap(
+  similarity_df,
+  x = "microstate",
+  y = "assigned_archetype",
+  fill = "mean_similarity",
+  title = "Figure 5. Archetype-conditioned EEG template similarity",
+  midpoint = median(similarity_df$mean_similarity, na.rm = TRUE)
+)
+save_panel(p, file.path(figure_dir, "figure_05_archetype_eeg_template_similarity.png"))
+```
+
+```{r archetype-fine-lag}
+archetype_lag_df <- read_bundle_table(manifest, "archetype_eeg_fine_lag_synchrony", bundle = "main")
+p <- plot_lag_curve(archetype_lag_df, "Figure 6. Archetype-conditioned EEG fine-lag synchrony")
+save_panel(p, file.path(figure_dir, "figure_06_archetype_eeg_fine_lag_synchrony.png"))
+```
