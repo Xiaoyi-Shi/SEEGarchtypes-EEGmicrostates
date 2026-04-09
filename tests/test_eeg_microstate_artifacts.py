@@ -193,12 +193,12 @@ def test_run_eeg_states_stage_rejects_incompatible_external_template(tmp_path: P
         run_eeg_states_stage(cfg, template_fif=str(external_path))
 
 
-def test_render_reports_writes_microstate_topography_from_fif_model(tmp_path: Path) -> None:
+def test_render_reports_does_not_export_standalone_eeg_microstate_templates(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
     model = _fit_model(_make_raw(cfg), cfg)
     save_microstate_model(model, cfg.cache_path("eeg", "group_microstate_model", ext="fif", branch="band_1_40"))
     outputs = render_reports(cfg)
-    assert outputs["microstates"].exists()
+    assert outputs == {}
 
 
 def test_run_eeg_states_stage_reuses_cached_gfp_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

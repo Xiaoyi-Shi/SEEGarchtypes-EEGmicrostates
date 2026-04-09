@@ -1428,18 +1428,21 @@ def test_render_reports_discovers_field_state_outputs(tmp_path: Path) -> None:
     )
 
     outputs = pipelines.render_reports(cfg)
-    assert outputs[f"{artifact_branch}_field_template_panels"].exists()
-    assert outputs[f"{artifact_branch}_field_profile_heatmap"].exists()
-    assert outputs[f"{artifact_branch}_field_transition_matrix"].exists()
-    assert outputs[f"{coupling_branch}_field_state_coupling_curve"].exists()
-    assert outputs[f"{gfp_branch}_gfp_controlled_field_state_omnibus_heatmap"].exists()
-    assert outputs[f"{gfp_branch}_gfp_controlled_field_state_transition_matrix"].exists()
-    assert outputs[f"{archetype_branch}_field_archetype_panels"].exists()
-    assert outputs[f"{archetype_branch}_field_archetype_assignments"].exists()
-    assert outputs[f"{fine_lag_branch}_fine_lag_field_state_coupling_curve"].exists()
-    assert outputs[f"{fine_lag_branch}_fine_lag_field_state_peak_heatmap"].exists()
-    assert outputs[f"{seeg_led_branch}_field_state_to_eeg_switching_matrix"].exists()
-    assert outputs[f"{gfp_seeg_led_branch}_gfp_controlled_field_state_to_eeg_switching_matrix"].exists()
+    output_paths = list(outputs.values())
+    assert outputs["paper_manifest_csv"].exists()
+    assert outputs["paper_manifest_excel"].exists()
+    assert any(path.parent.name == "main_figures" and "subject_field_state_templates" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_tables" and "subject_field_state_profiles" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_figures" and "field_state_synchronous_coupling" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_figures" and "field_state_fine_lag_synchrony" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_figures" and "group_field_state_archetypes" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "field_state_archetype_assignments" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "field_state_to_eeg_switching" in path.name for path in output_paths)
+    assert any(
+        path.parent.name == "supplementary_figures" and "gfp_controlled_field_state_to_eeg_switching" in path.name
+        for path in output_paths
+    )
+    assert not any("gfp_controlled_field_state_switching" in path.name for path in output_paths)
 
 
 def test_render_reports_discovers_archetype_conditioned_eeg_topography_outputs(tmp_path: Path) -> None:
@@ -1620,9 +1623,10 @@ def test_render_reports_discovers_archetype_conditioned_eeg_topography_outputs(t
     )
 
     outputs = pipelines.render_reports(cfg)
-    assert outputs[f"{branch}_archetype_conditioned_eeg_topographies"].exists()
-    assert outputs[f"{branch}_archetype_template_similarity_heatmap"].exists()
-    assert outputs[f"{branch}_archetype_state_preference_heatmap"].exists()
-    assert outputs[f"{branch}_archetype_fine_lag_curve"].exists()
-    assert outputs[f"{branch}_archetype_fine_lag_peak_heatmap"].exists()
-    assert outputs[f"{branch}_archetype_to_eeg_switching_matrix"].exists()
+    output_paths = list(outputs.values())
+    assert any(path.parent.name == "main_figures" and "archetype_conditioned_eeg_topographies" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_tables" and "archetype_eeg_template_similarity" in path.name for path in output_paths)
+    assert any(path.parent.name == "main_figures" and "archetype_eeg_fine_lag_synchrony" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "archetype_eeg_template_similarity" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "archetype_eeg_state_preference" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "archetype_to_eeg_switching" in path.name for path in output_paths)

@@ -49,23 +49,21 @@ def test_cli_describes_aal3_region_outputs() -> None:
     assert "run-seeg-regions" in top_level_help
     assert "run-exploratory-coupling" in top_level_help
     assert "IDE_S" in build_index_help
-    assert "direct-state-coupling" in exploratory_help
-    assert "lagged-state-coupling" in exploratory_help
-    assert "transition-state-coupling" in exploratory_help
     assert "field-state-coupling" in exploratory_help
-    assert "lagged-field-state-coupling" in exploratory_help
-    assert "fine-lag-field-state-coupling" in exploratory_help
-    assert "transition-field-state-coupling" in exploratory_help
-    assert "field-state-to-eeg-switching" in exploratory_help
-    assert "gfp-controlled-field-state-switching" in exploratory_help
     assert "field-state-archetypes" in exploratory_help
     assert "archetype-conditioned-eeg-topography" in exploratory_help
-    assert "gfp-controlled-field-state-to-eeg-switching" in exploratory_help
+    assert "fine-lag-field-state-coupling" in exploratory_help
     assert "gfp-global-coupling" in exploratory_help
     assert "lagged-gfp-global-coupling" in exploratory_help
     assert "peak-gfp-global-coupling" in exploratory_help
     assert "gfp-controlled-microstate" in exploratory_help
     assert "gfp-controlled-transition" in exploratory_help
+    assert "field-state-to-eeg-switching" in exploratory_help
+    assert "gfp-controlled-field-state-to-eeg-switching" in exploratory_help
+    assert "direct-state-coupling" not in exploratory_help
+    assert "event-connectivity" not in exploratory_help
+    assert "--event-window-sec" not in exploratory_help
+    assert "--direct-backend" not in exploratory_help
     assert "state-alignment" not in top_level_help
 
 
@@ -110,56 +108,31 @@ def test_run_exploratory_coupling_accepts_analysis_specific_options() -> None:
         [
             "run-exploratory-coupling",
             "--analysis",
-            "event-connectivity",
-            "--method",
-            "plv",
-            "--event-window-sec",
-            "1.5",
-            "--window-sec",
-            "12",
+            "gfp-controlled-transition",
+            "--global-metric",
+            "envelope-rms",
+            "--global-weighting",
+            "sqrt-channel-count",
+            "--transition-window-sec",
+            "0.5",
             "--min-subjects",
             "5",
         ]
     )
     assert args.command == "run-exploratory-coupling"
-    assert args.analysis == "event-connectivity"
-    assert args.method == "plv"
-    assert args.event_window_sec == 1.5
-    assert args.window_sec == 12.0
+    assert args.analysis == "gfp-controlled-transition"
+    assert args.global_metric == "envelope-rms"
+    assert args.global_weighting == "sqrt-channel-count"
+    assert args.transition_window_sec == 0.5
     assert args.min_subjects == 5
 
 
-def test_run_exploratory_coupling_accepts_direct_state_options() -> None:
+def test_run_exploratory_coupling_rejects_retired_public_options() -> None:
     parser = build_parser()
-    args = parser.parse_args(
-        [
-            "run-exploratory-coupling",
-            "--analysis",
-            "lagged-state-coupling",
-            "--direct-backend",
-            "pca-kmeans",
-            "--direct-state-count",
-            "5",
-            "--direct-components",
-            "2",
-            "--max-lag-ms",
-            "200",
-            "--lag-step-ms",
-            "40",
-            "--transition-window-sec",
-            "0.5",
-            "--direct-surrogates",
-            "64",
-        ]
-    )
-    assert args.analysis == "lagged-state-coupling"
-    assert args.direct_backend == "pca-kmeans"
-    assert args.direct_state_count == 5
-    assert args.direct_components == 2
-    assert args.max_lag_ms == 200
-    assert args.lag_step_ms == 40
-    assert args.transition_window_sec == 0.5
-    assert args.direct_surrogates == 64
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run-exploratory-coupling", "--analysis", "lagged-state-coupling"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run-exploratory-coupling", "--analysis", "field-state-coupling", "--direct-backend", "pca-kmeans"])
 
 
 def test_run_exploratory_coupling_accepts_field_state_options() -> None:

@@ -163,7 +163,7 @@ def test_run_activity_effects_stage_reuses_cached_outputs(tmp_path: Path) -> Non
     assert not (cfg.reports_root / "qc").exists()
 
 
-def test_render_reports_exports_main_omnibus_and_posthoc_outputs(tmp_path: Path) -> None:
+def test_render_reports_ignores_legacy_main_activity_and_connectivity_outputs(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
     write_dataframe(
         pd.DataFrame(
@@ -264,20 +264,10 @@ def test_render_reports_exports_main_omnibus_and_posthoc_outputs(tmp_path: Path)
     )
 
     outputs = render_reports(cfg)
-
-    assert outputs["activity_omnibus_heatmap"].exists()
-    assert outputs["activity_posthoc_heatmap"].exists()
-    assert outputs["activity_subject_profiles_excel"].exists()
-    assert outputs["activity_group_omnibus_excel"].exists()
-    assert outputs["activity_group_posthoc_excel"].exists()
-    assert outputs["band_connectivity_plv_omnibus"].exists()
-    assert outputs["band_connectivity_plv_posthoc"].exists()
-    assert outputs["band_connectivity_plv_subject_profiles_excel"].exists()
-    assert outputs["band_connectivity_plv_group_omnibus_excel"].exists()
-    assert outputs["band_connectivity_plv_group_posthoc_excel"].exists()
+    assert outputs == {}
 
 
-def test_render_reports_reads_region_coverage_cache(tmp_path: Path) -> None:
+def test_render_reports_does_not_promote_region_coverage_to_paper_bundle(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
     coverage_path = cfg.cache_path("seeg", "region_coverage", ext="parquet", branch="band_1_40")
     write_dataframe(
@@ -291,9 +281,7 @@ def test_render_reports_reads_region_coverage_cache(tmp_path: Path) -> None:
         coverage_path,
     )
     outputs = render_reports(cfg)
-    assert outputs["coverage"].exists()
-    assert "region_coverage" in outputs["coverage"].name
-    assert "runs" in str(outputs["coverage"])
+    assert outputs == {}
 
 
 def test_run_exploratory_coupling_stage_reuses_cached_event_activity_outputs(tmp_path: Path) -> None:
@@ -529,7 +517,7 @@ def test_run_exploratory_coupling_stage_reuses_cached_gfp_global_outputs(tmp_pat
     assert outputs["group_effects_excel"].exists()
 
 
-def test_render_reports_discovers_exploratory_outputs(tmp_path: Path) -> None:
+def test_render_reports_hides_retired_region_signal_exploratory_outputs(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
     event_branch = _exploratory_branch(
         cfg,
@@ -676,13 +664,10 @@ def test_render_reports_discovers_exploratory_outputs(tmp_path: Path) -> None:
     )
 
     outputs = render_reports(cfg)
-    assert outputs[f"{event_branch}_event_activity_heatmap"].exists()
-    assert outputs[f"{connectivity_branch}_event_connectivity_heatmap"].exists()
-    assert outputs[f"{windowed_branch}_windowed_coupling_heatmap"].exists()
-    assert outputs[f"{transition_branch}_transition_coupling_heatmap"].exists()
+    assert outputs == {}
 
 
-def test_render_reports_discovers_direct_state_outputs(tmp_path: Path) -> None:
+def test_render_reports_hides_legacy_direct_state_outputs(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260406_123456")
     direct_branch = _exploratory_branch(
         cfg,
@@ -821,9 +806,7 @@ def test_render_reports_discovers_direct_state_outputs(tmp_path: Path) -> None:
     )
 
     outputs = render_reports(cfg)
-    assert outputs[f"{direct_branch}_direct_state_coupling_curve"].exists()
-    assert outputs[f"{lagged_branch}_lagged_state_coupling_curve"].exists()
-    assert outputs[f"{transition_state_branch}_transition_state_coupling_matrix"].exists()
+    assert outputs == {}
 
 
 def test_render_reports_discovers_gfp_global_outputs(tmp_path: Path) -> None:
@@ -1044,8 +1027,12 @@ def test_render_reports_discovers_gfp_global_outputs(tmp_path: Path) -> None:
     )
 
     outputs = render_reports(cfg)
-    assert outputs[f"{gfp_branch}_gfp_global_coupling_curve"].exists()
-    assert outputs[f"{peak_branch}_peak_gfp_global_coupling_curve"].exists()
-    assert outputs[f"{microstate_branch}_gfp_controlled_microstate_omnibus_heatmap"].exists()
-    assert outputs[f"{microstate_branch}_gfp_controlled_microstate_posthoc_heatmap"].exists()
-    assert outputs[f"{transition_branch}_gfp_controlled_transition_matrix"].exists()
+    output_paths = list(outputs.values())
+    assert outputs["paper_manifest_csv"].exists()
+    assert outputs["paper_manifest_excel"].exists()
+    assert any(path.parent.name == "supplementary_figures" and "gfp_global_coupling" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "peak_gfp_global_coupling" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "gfp_controlled_microstate" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_figures" and "gfp_controlled_transition" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "gfp_global_coupling" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "gfp_controlled_transition" in path.name for path in output_paths)

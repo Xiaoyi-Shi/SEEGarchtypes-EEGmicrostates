@@ -7,11 +7,6 @@ import traceback
 from seeg_eegmicrostates.config import (
     AnalysisConfig,
     DEFAULT_ANALYSIS_STATE,
-    DEFAULT_DIRECT_LAG_STEP_MS,
-    DEFAULT_DIRECT_MAX_LAG_MS,
-    DEFAULT_DIRECT_STATE_BACKEND,
-    DEFAULT_DIRECT_STATE_COMPONENTS,
-    DEFAULT_DIRECT_STATE_SURROGATES,
     DEFAULT_DIRECT_TRANSITION_WINDOW_SEC,
     SEEG_PARCELLATION_COLUMN,
     SEEG_PARCELLATION_NAME,
@@ -29,7 +24,6 @@ from seeg_eegmicrostates.coupling import (
     SUPPORTED_FIELD_STATE_NORMALIZATIONS,
     SUPPORTED_FIELD_STATE_PEAK_METRICS,
     SUPPORTED_FIELD_ARCHETYPE_SPACES,
-    SUPPORTED_DIRECT_STATE_BACKENDS,
     SUPPORTED_GFP_GLOBAL_METRICS,
     SUPPORTED_GFP_GLOBAL_WEIGHTINGS,
 )
@@ -45,27 +39,17 @@ from seeg_eegmicrostates.workflows import (
 
 
 _EXPLORATORY_ANALYSIS_CHOICES = (
-    "event-activity",
-    "event-connectivity",
-    "windowed-coupling",
-    "transition-coupling",
-    "direct-state-coupling",
-    "lagged-state-coupling",
-    "transition-state-coupling",
     "field-state-coupling",
-    "lagged-field-state-coupling",
-    "fine-lag-field-state-coupling",
-    "transition-field-state-coupling",
-    "field-state-to-eeg-switching",
-    "gfp-controlled-field-state-switching",
     "field-state-archetypes",
     "archetype-conditioned-eeg-topography",
-    "gfp-controlled-field-state-to-eeg-switching",
+    "fine-lag-field-state-coupling",
     "gfp-global-coupling",
     "lagged-gfp-global-coupling",
     "peak-gfp-global-coupling",
     "gfp-controlled-microstate",
     "gfp-controlled-transition",
+    "field-state-to-eeg-switching",
+    "gfp-controlled-field-state-to-eeg-switching",
 )
 
 
@@ -116,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     exploratory_parser = subparsers.add_parser(
         "run-exploratory-coupling",
         parents=common_parents,
-        help="Run opt-in exploratory EEG/SEEG region-signal and direct state-coupling analyses from staged EEG labels and staged SEEG parcellation signals.",
+        help="Run the paper-focused SEEG field-state exploratory workflow plus supplementary GFP/global and SEEG-led switching follow-ups.",
     )
     exploratory_parser.add_argument("--analysis", default="all", choices=["all", *_EXPLORATORY_ANALYSIS_CHOICES])
     exploratory_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
@@ -172,10 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--global-weighting",
         default=DEFAULT_GFP_GLOBAL_WEIGHTING,
         choices=[*SUPPORTED_GFP_GLOBAL_WEIGHTINGS, "all"],
-        help="Weighting strategy used when aggregating Yeo17 core-network signals into a SEEG global metric.",
+        help="Weighting strategy used when aggregating Yeo17 core-network signals into a SEEG global metric for supplementary GFP-informed analyses.",
     )
-    exploratory_parser.add_argument("--event-window-sec", type=float, default=1.0)
-    exploratory_parser.add_argument("--window-sec", type=float, default=10.0)
     exploratory_parser.add_argument(
         "--peak-window-sec",
         type=float,
@@ -186,43 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--transition-window-sec",
         type=float,
         default=DEFAULT_DIRECT_TRANSITION_WINDOW_SEC,
-        help="Window size in seconds used by transition-conditioned exploratory analyses.",
-    )
-    exploratory_parser.add_argument(
-        "--direct-backend",
-        default=DEFAULT_DIRECT_STATE_BACKEND,
-        choices=list(SUPPORTED_DIRECT_STATE_BACKENDS),
-        help="Reduced-space backend used for direct EEG-SEEG state-coupling analyses.",
-    )
-    exploratory_parser.add_argument(
-        "--direct-state-count",
-        type=int,
-        default=None,
-        help="Optional SEEG state count for direct EEG-SEEG state coupling. Defaults to the EEG microstate count.",
-    )
-    exploratory_parser.add_argument(
-        "--direct-components",
-        type=int,
-        default=DEFAULT_DIRECT_STATE_COMPONENTS,
-        help="Number of reduced SEEG components used by direct EEG-SEEG state coupling.",
-    )
-    exploratory_parser.add_argument(
-        "--max-lag-ms",
-        type=int,
-        default=DEFAULT_DIRECT_MAX_LAG_MS,
-        help="Maximum absolute lag in milliseconds used by lagged direct EEG-SEEG state coupling.",
-    )
-    exploratory_parser.add_argument(
-        "--lag-step-ms",
-        type=int,
-        default=DEFAULT_DIRECT_LAG_STEP_MS,
-        help="Lag step size in milliseconds used by lagged direct EEG-SEEG state coupling.",
-    )
-    exploratory_parser.add_argument(
-        "--direct-surrogates",
-        type=int,
-        default=DEFAULT_DIRECT_STATE_SURROGATES,
-        help="Number of circular-shift surrogates used by direct EEG-SEEG state coupling statistics.",
+        help="Window size in seconds used by supplementary SEEG-led switching and GFP-controlled transition follow-ups.",
     )
     exploratory_parser.add_argument(
         "--global-surrogates",
@@ -308,13 +254,8 @@ def main(argv: list[str] | None = None) -> None:
                 method=args.method,
                 global_metric=args.global_metric,
                 global_weighting=args.global_weighting,
-                event_window_sec=args.event_window_sec,
-                window_sec=args.window_sec,
                 peak_window_sec=args.peak_window_sec,
                 transition_window_sec=args.transition_window_sec,
-                direct_backend=args.direct_backend,
-                direct_state_count=args.direct_state_count,
-                direct_components=args.direct_components,
                 field_peak_metric=args.field_peak_metric,
                 field_normalization=args.field_normalization,
                 field_state_count=args.field_state_count,
@@ -322,9 +263,6 @@ def main(argv: list[str] | None = None) -> None:
                 field_archetype_space=args.field_archetype_space,
                 field_surrogates=args.field_surrogates,
                 fine_lag_window_ms=args.fine_lag_window_ms,
-                max_lag_ms=args.max_lag_ms,
-                lag_step_ms=args.lag_step_ms,
-                direct_surrogates=args.direct_surrogates,
                 global_surrogates=args.global_surrogates,
                 min_subjects=args.min_subjects,
             )
