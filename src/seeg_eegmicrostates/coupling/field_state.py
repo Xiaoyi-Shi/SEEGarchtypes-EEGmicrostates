@@ -19,6 +19,7 @@ DEFAULT_FIELD_STATE_NORMALIZATION = "zscore"
 DEFAULT_FIELD_STATE_SURROGATES = 128
 DEFAULT_FIELD_STATE_MAX_PEAK_MAPS = 5000
 DEFAULT_FINE_FIELD_LAG_WINDOW_MS = 40
+DEFAULT_FIELD_STATE_MODEL_ORDER_RANGE: tuple[int, ...] = (2, 3, 4, 5, 6, 7)
 
 
 def normalize_field_peak_metric(metric: str) -> str:
@@ -95,6 +96,33 @@ def _field_template_channel_columns(template_df: pd.DataFrame) -> list[str]:
         "min_similarity",
     }
     return [column for column in template_df.columns if column not in metadata_columns]
+
+
+def _field_peak_map_channel_columns(peak_map_df: pd.DataFrame) -> list[str]:
+    metadata_columns = {
+        "patient_id",
+        "peak_id",
+        "event_sec",
+        "sample",
+        "peak_metric",
+        "normalization",
+        "n_states",
+        "min_duration_ms",
+        "peak_metric_value",
+        "field_state",
+        "corr",
+    }
+    channel_columns: list[str] = []
+    for column in peak_map_df.columns:
+        if column in metadata_columns:
+            continue
+        series = peak_map_df[column]
+        if not pd.api.types.is_numeric_dtype(series):
+            continue
+        if not series.notna().any():
+            continue
+        channel_columns.append(column)
+    return channel_columns
 
 
 def _robust_mad(values: np.ndarray, axis: int, keepdims: bool) -> np.ndarray:
@@ -487,6 +515,186 @@ def _stable_field_state_templates(
     ordered_labels = np.array([remap[int(label)] for label in labels], dtype=int)
     ordered_scores = _absolute_similarity(peak_patterns, ordered_templates)[np.arange(peak_patterns.shape[0]), ordered_labels]
     return ordered_templates, ordered_labels, ordered_scores
+
+
+def _template_set_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    left_values = np.asarray(left, dtype=float)
+    right_values = np.asarray(right, dtype=float)
+    if left_values.ndim != 2 or right_values.ndim != 2:
+        return float("nan")
+    if left_values.shape[0] == 0 or right_values.shape[0] == 0:
+        return float("nan")
+    similarity = _absolute_similarity(left_values, right_values)
+    if similarity.size == 0:
+        return float("nan")
+    if left_values.shape[0] <= right_values.shape[0]:
+        assignment = _best_unique_archetype_assignment(similarity)
+        if assignment.size == 0:
+            return float("nan")
+        return float(np.mean(similarity[np.arange(assignment.size), assignment]))
+    assignment = _best_unique_archetype_assignment(similarity.T)
+    if assignment.size == 0:
+        return float("nan")
+    return float(np.mean(similarity[assignment, np.arange(assignment.size)]))
+
+
+def _split_half_template_stability(
+    peak_map_df: pd.DataFrame,
+    *,
+    n_states: int,
+    seed: int,
+) -> float:
+    if peak_map_df.empty:
+        return float("nan")
+    channel_columns = _field_peak_map_channel_columns(peak_map_df)
+    if not channel_columns:
+        return float("nan")
+    patterns = peak_map_df[channel_columns].to_numpy(dtype=float)
+    if patterns.shape[0] < max(2 * int(n_states), 4):
+        return float("nan")
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(patterns.shape[0])
+    split_index = patterns.shape[0] // 2
+    first_indices = order[:split_index]
+    second_indices = order[split_index:]
+    if first_indices.size < int(n_states) or second_indices.size < int(n_states):
+        return float("nan")
+    first_templates, _, _ = _stable_field_state_templates(patterns[first_indices], n_states=n_states, seed=seed)
+    second_templates, _, _ = _stable_field_state_templates(patterns[second_indices], n_states=n_states, seed=seed + 1)
+    if first_templates.shape[0] != int(n_states) or second_templates.shape[0] != int(n_states):
+        return float("nan")
+    return _template_set_similarity(first_templates, second_templates)
+
+
+def summarize_subject_field_state_model_order(
+    peak_map_df: pd.DataFrame,
+    template_df: pd.DataFrame,
+    profile_df: pd.DataFrame,
+    *,
+    patient_id: str,
+    stability_seed: int,
+) -> pd.DataFrame:
+    columns = [
+        "patient_id",
+        "peak_metric",
+        "normalization",
+        "n_states",
+        "min_duration_ms",
+        "n_channels",
+        "n_peak_maps_total",
+        "mean_template_fit",
+        "median_template_fit",
+        "min_template_fit",
+        "split_half_stability",
+        "min_state_occupancy",
+        "max_state_occupancy",
+        "min_state_peak_fraction",
+        "max_state_peak_fraction",
+        "occupancy_entropy",
+    ]
+    if peak_map_df.empty or template_df.empty or profile_df.empty:
+        return pd.DataFrame(columns=columns)
+    ordered_templates = template_df.sort_values("field_state").reset_index(drop=True)
+    ordered_profiles = profile_df.sort_values("field_state").reset_index(drop=True)
+    candidate_k = int(ordered_templates["n_states"].iloc[0])
+    total_peak_maps = int(peak_map_df.shape[0])
+    if total_peak_maps <= 0:
+        return pd.DataFrame(columns=columns)
+    occupancies = ordered_profiles["occupancy"].to_numpy(dtype=float)
+    peak_counts = ordered_templates["n_peak_maps"].to_numpy(dtype=float)
+    peak_fractions = peak_counts / float(total_peak_maps)
+    valid_occupancies = occupancies[np.isfinite(occupancies) & (occupancies > 0.0)]
+    if valid_occupancies.size:
+        occupancy_entropy = float(-np.sum(valid_occupancies * np.log(valid_occupancies)) / np.log(float(candidate_k)))
+    else:
+        occupancy_entropy = float("nan")
+    row = {
+        "patient_id": patient_id,
+        "peak_metric": str(ordered_templates["peak_metric"].iloc[0]),
+        "normalization": str(ordered_templates["normalization"].iloc[0]),
+        "n_states": candidate_k,
+        "min_duration_ms": int(ordered_templates["min_duration_ms"].iloc[0]),
+        "n_channels": int(ordered_templates["n_channels"].iloc[0]),
+        "n_peak_maps_total": total_peak_maps,
+        "mean_template_fit": float(peak_map_df["corr"].mean()),
+        "median_template_fit": float(peak_map_df["corr"].median()),
+        "min_template_fit": float(peak_map_df["corr"].min()),
+        "split_half_stability": _split_half_template_stability(peak_map_df, n_states=candidate_k, seed=stability_seed),
+        "min_state_occupancy": float(np.nanmin(occupancies)),
+        "max_state_occupancy": float(np.nanmax(occupancies)),
+        "min_state_peak_fraction": float(np.nanmin(peak_fractions)),
+        "max_state_peak_fraction": float(np.nanmax(peak_fractions)),
+        "occupancy_entropy": occupancy_entropy,
+    }
+    return pd.DataFrame([row], columns=columns)
+
+
+def summarize_group_field_state_model_order(
+    subject_df: pd.DataFrame,
+    *,
+    retained_k: int,
+) -> pd.DataFrame:
+    columns = [
+        "peak_metric",
+        "normalization",
+        "n_states",
+        "min_duration_ms",
+        "retained_main_text_default",
+        "n_subjects",
+        "mean_template_fit",
+        "median_template_fit",
+        "mean_fit_gain_from_prev_k",
+        "median_fit_gain_from_prev_k",
+        "mean_split_half_stability",
+        "median_split_half_stability",
+        "mean_min_state_occupancy",
+        "median_min_state_occupancy",
+        "mean_min_state_peak_fraction",
+        "median_min_state_peak_fraction",
+        "mean_occupancy_entropy",
+        "median_occupancy_entropy",
+    ]
+    if subject_df.empty:
+        return pd.DataFrame(columns=columns)
+    group_rows: list[dict[str, object]] = []
+    grouped = subject_df.groupby(["peak_metric", "normalization", "n_states", "min_duration_ms"], sort=True)
+    for keys, group in grouped:
+        peak_metric, normalization, n_states, min_duration_ms = keys
+        group_rows.append(
+            {
+                "peak_metric": str(peak_metric),
+                "normalization": str(normalization),
+                "n_states": int(n_states),
+                "min_duration_ms": int(min_duration_ms),
+                "retained_main_text_default": bool(int(n_states) == int(retained_k)),
+                "n_subjects": int(group["patient_id"].nunique()),
+                "mean_template_fit": float(group["mean_template_fit"].mean()),
+                "median_template_fit": float(group["mean_template_fit"].median()),
+                "mean_fit_gain_from_prev_k": float(group["fit_gain_from_prev_k"].dropna().mean())
+                if group["fit_gain_from_prev_k"].dropna().size
+                else float("nan"),
+                "median_fit_gain_from_prev_k": float(group["fit_gain_from_prev_k"].dropna().median())
+                if group["fit_gain_from_prev_k"].dropna().size
+                else float("nan"),
+                "mean_split_half_stability": float(group["split_half_stability"].dropna().mean())
+                if group["split_half_stability"].dropna().size
+                else float("nan"),
+                "median_split_half_stability": float(group["split_half_stability"].dropna().median())
+                if group["split_half_stability"].dropna().size
+                else float("nan"),
+                "mean_min_state_occupancy": float(group["min_state_occupancy"].mean()),
+                "median_min_state_occupancy": float(group["min_state_occupancy"].median()),
+                "mean_min_state_peak_fraction": float(group["min_state_peak_fraction"].mean()),
+                "median_min_state_peak_fraction": float(group["min_state_peak_fraction"].median()),
+                "mean_occupancy_entropy": float(group["occupancy_entropy"].dropna().mean())
+                if group["occupancy_entropy"].dropna().size
+                else float("nan"),
+                "median_occupancy_entropy": float(group["occupancy_entropy"].dropna().median())
+                if group["occupancy_entropy"].dropna().size
+                else float("nan"),
+            }
+        )
+    return pd.DataFrame(group_rows, columns=columns).sort_values("n_states").reset_index(drop=True)
 
 
 def _smooth_short_runs(labels: np.ndarray, scores: np.ndarray, min_samples: int) -> np.ndarray:

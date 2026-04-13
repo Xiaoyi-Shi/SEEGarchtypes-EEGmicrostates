@@ -119,3 +119,38 @@ p2 <- plot_state_heatmap(
 )
 save_panel(p1 + p2, file.path(figure_dir, "supplementary_figure_08_gfp_controlled_followups.png"), width = 12, height = 5.5)
 ```
+
+```{r field-state-model-order}
+model_subject_df <- read_bundle_table(manifest, "field_state_model_order_subject", bundle = "supplementary")
+model_group_df <- read_bundle_table(manifest, "field_state_model_order_group", bundle = "supplementary")
+
+fit_panel <- plot_model_order_curve(
+  model_subject_df,
+  model_group_df,
+  subject_y = "mean_template_fit",
+  group_y = "median_template_fit",
+  title = "Supplementary Figure 9A. Field-state model-order template fit",
+  y_label = "Median template fit"
+)
+
+gain_panel <- plot_model_order_curve(
+  model_subject_df %>% filter(!is.na(fit_gain_from_prev_k)),
+  model_group_df %>% filter(!is.na(median_fit_gain_from_prev_k)),
+  subject_y = "fit_gain_from_prev_k",
+  group_y = "median_fit_gain_from_prev_k",
+  title = "Supplementary Figure 9B. Incremental fit gain",
+  y_label = "Median fit gain from K-1"
+)
+
+stability_panel <- plot_model_order_curve(
+  model_subject_df %>% filter(!is.na(split_half_stability)),
+  model_group_df %>% filter(!is.na(median_split_half_stability)),
+  subject_y = "split_half_stability",
+  group_y = "median_split_half_stability",
+  title = "Supplementary Figure 9C. Split-half template stability",
+  y_label = "Median split-half stability"
+)
+
+combined <- (fit_panel / gain_panel / stability_panel) + plot_layout(guides = "collect")
+save_panel(combined, file.path(figure_dir, "supplementary_figure_09_field_state_model_order.png"), width = 8, height = 12)
+```

@@ -51,6 +51,7 @@ def test_cli_describes_aal3_region_outputs() -> None:
     assert "run-exploratory-coupling" in top_level_help
     assert "IDE_S" in build_index_help
     assert "field-state-coupling" in exploratory_help
+    assert "field-state-model-order-evaluation" in exploratory_help
     assert "field-state-archetypes" in exploratory_help
     assert "archetype-conditioned-eeg-topography" in exploratory_help
     assert "fine-lag-field-state-coupling" in exploratory_help
@@ -168,6 +169,30 @@ def test_run_exploratory_coupling_accepts_field_state_options() -> None:
     assert args.field_archetype_space == "yeo17"
     assert args.field_surrogates == 64
     assert args.fine_lag_window_ms == 24
+
+
+def test_run_exploratory_coupling_accepts_field_state_model_order_analysis() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-exploratory-coupling",
+            "--analysis",
+            "field-state-model-order-evaluation",
+            "--field-peak-metric",
+            "rms",
+            "--field-normalization",
+            "zscore",
+            "--field-min-duration-ms",
+            "20",
+            "--min-subjects",
+            "5",
+        ]
+    )
+    assert args.analysis == "field-state-model-order-evaluation"
+    assert args.field_peak_metric == "rms"
+    assert args.field_normalization == "zscore"
+    assert args.field_min_duration_ms == 20
+    assert args.min_subjects == 5
 
 
 def test_run_exploratory_coupling_accepts_archetype_conditioned_topography_analysis() -> None:

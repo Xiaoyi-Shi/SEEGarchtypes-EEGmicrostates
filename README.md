@@ -65,7 +65,7 @@ What each command does:
 - `run-seeg-regions`: maps bipolar channels to same-region `AAL3` pairs, rescales them onto the shared `250 Hz` analysis grid, and computes reusable raw-scale `1-40 Hz` region time series.
 - `run-activity-effects`: computes EEG-state-conditioned `AAL3` activity profiles together with four-state omnibus and pairwise post-hoc summaries from the staged caches.
 - `run-connectivity-effects`: computes primary EEG-state-conditioned `AAL3` region connectivity profiles together with omnibus and pairwise post-hoc summaries from the staged caches using `corr`, `PLV`, `wPLI`, or all methods.
-- `run-exploratory-coupling`: runs the maintained paper-focused SEEG field-state workflow on top of the staged EEG labels, EEG GFP artifacts, and staged SEEG signals. Maintained analyses are `field-state-coupling`, `fine-lag-field-state-coupling`, `field-state-archetypes`, `archetype-conditioned-eeg-topography`, plus supplementary `gfp-global-coupling`, `lagged-gfp-global-coupling`, `peak-gfp-global-coupling`, `gfp-controlled-microstate`, `gfp-controlled-transition`, `field-state-to-eeg-switching`, `gfp-controlled-field-state-to-eeg-switching`, or `all`.
+- `run-exploratory-coupling`: runs the maintained paper-focused SEEG field-state workflow on top of the staged EEG labels, EEG GFP artifacts, and staged SEEG signals. Maintained analyses are `field-state-coupling`, `fine-lag-field-state-coupling`, `field-state-archetypes`, `archetype-conditioned-eeg-topography`, plus supplementary `field-state-model-order-evaluation`, `gfp-global-coupling`, `lagged-gfp-global-coupling`, `peak-gfp-global-coupling`, `gfp-controlled-microstate`, `gfp-controlled-transition`, `field-state-to-eeg-switching`, `gfp-controlled-field-state-to-eeg-switching`, or `all`.
 - `export-paper-tables`: writes categorized manuscript-facing CSV/XLSX tables plus manifests from cached results. Final figure rendering is handled by the maintained R Markdown scripts under `scripts/`.
 
 By default, EEG state staging uses the configured default template file `artifacts/cache/eeg/ModK.fif`. The `--template-fif` option overrides that default with another compatible `pycrostates` `.fif` cluster solution fitted on either the shared 11-channel montage (`F3/Fz/F4/C3/Cz/C4/P3/Pz/P4/O1/O2`) or the restored 19-channel EEG layout used by this workflow. If neither the override nor the configured default template exists, the EEG stage stops before labeling.
@@ -74,6 +74,7 @@ Exploratory analyses are intentionally opt-in and do not change the default stag
 
 ```bash
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis field-state-coupling --field-state-count 4
+uv run seeg-eegmicrostates run-exploratory-coupling --analysis field-state-model-order-evaluation
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis fine-lag-field-state-coupling --fine-lag-window-ms 40
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis field-state-archetypes --field-archetype-space yeo17
 uv run seeg-eegmicrostates run-exploratory-coupling --analysis archetype-conditioned-eeg-topography --field-archetype-space yeo17 --fine-lag-window-ms 40
@@ -100,6 +101,8 @@ The intended interpretation ladder is:
 3. test whether microstate or transition effects remain after controlling for EEG GFP
 
 If a GFP-controlled follow-up remains positive, it suggests state identity adds information beyond shared global amplitude dynamics. If it disappears after GFP control, the cleaner interpretation is that the observed coupling is mainly a shared global-drive effect.
+
+The retained manuscript default for subject-level SEEG field-state discovery remains `K=4`. A dedicated supplementary model-order branch evaluates `K=2..7` in the same subject-level bipolar peak-map discovery space and exports grouped support tables plus a supplementary R figure family so the manuscript can justify retained `K=4` using fit plateau, incremental gain decay, split-half stability, and interpretability together.
 
 To rerun the main workflow from scratch, execute the commands in order:
 

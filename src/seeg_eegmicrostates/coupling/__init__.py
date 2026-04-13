@@ -26,6 +26,7 @@ from .effects import (
 )
 from .field_state import (
     DEFAULT_FINE_FIELD_LAG_WINDOW_MS,
+    DEFAULT_FIELD_STATE_MODEL_ORDER_RANGE,
     DEFAULT_FIELD_STATE_NORMALIZATION,
     DEFAULT_FIELD_STATE_PEAK_METRIC,
     DEFAULT_FIELD_STATE_SURROGATES,
@@ -56,6 +57,8 @@ from .field_state import (
     project_field_state_templates_to_common_space,
     summarize_group_archetype_conditioned_eeg_maps,
     summarize_group_archetype_template_similarity,
+    summarize_group_field_state_model_order,
+    summarize_subject_field_state_model_order,
     summarize_subject_fine_lag_profile,
 )
 from .gfp_global import (
@@ -95,6 +98,7 @@ __all__ = [
     "SUPPORTED_GFP_GLOBAL_METRICS",
     "SUPPORTED_GFP_GLOBAL_WEIGHTINGS",
     "DEFAULT_FIELD_STATE_NORMALIZATION",
+    "DEFAULT_FIELD_STATE_MODEL_ORDER_RANGE",
     "DEFAULT_FINE_FIELD_LAG_WINDOW_MS",
     "DEFAULT_FIELD_STATE_PEAK_METRIC",
     "DEFAULT_FIELD_STATE_SURROGATES",
@@ -159,5 +163,7 @@ __all__ = [
     "sample_period_from_times",
     "summarize_group_archetype_conditioned_eeg_maps",
     "summarize_group_archetype_template_similarity",
+    "summarize_group_field_state_model_order",
+    "summarize_subject_field_state_model_order",
     "summarize_subject_fine_lag_profile",
 ]

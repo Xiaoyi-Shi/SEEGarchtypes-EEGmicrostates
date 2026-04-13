@@ -40,6 +40,7 @@ from seeg_eegmicrostates.workflows import (
 
 _EXPLORATORY_ANALYSIS_CHOICES = (
     "field-state-coupling",
+    "field-state-model-order-evaluation",
     "field-state-archetypes",
     "archetype-conditioned-eeg-topography",
     "fine-lag-field-state-coupling",

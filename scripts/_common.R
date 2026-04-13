@@ -183,3 +183,39 @@ plot_archetype_loadings <- function(df, title) {
   plot_state_heatmap(long_df, "network", "archetype", "loading", title = title, midpoint = 0) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }
+
+plot_model_order_curve <- function(subject_df, group_df, subject_y, group_y, title, y_label, retained_k = 4) {
+  ggplot() +
+    geom_vline(xintercept = retained_k, color = "#b22222", linewidth = 0.6, linetype = "dashed") +
+    geom_line(
+      data = subject_df,
+      aes(x = n_states, y = .data[[subject_y]], group = patient_id),
+      color = "grey70",
+      linewidth = 0.4,
+      alpha = 0.6
+    ) +
+    geom_point(
+      data = subject_df,
+      aes(x = n_states, y = .data[[subject_y]]),
+      color = "grey70",
+      size = 1.1,
+      alpha = 0.6
+    ) +
+    geom_line(
+      data = group_df,
+      aes(x = n_states, y = .data[[group_y]]),
+      color = "#1b4d6b",
+      linewidth = 0.9
+    ) +
+    geom_point(
+      data = group_df,
+      aes(x = n_states, y = .data[[group_y]], fill = retained_main_text_default),
+      color = "#1b4d6b",
+      shape = 21,
+      size = 2.3
+    ) +
+    scale_fill_manual(values = c(`TRUE` = "#b22222", `FALSE` = "white"), guide = "none") +
+    scale_x_continuous(breaks = sort(unique(group_df$n_states))) +
+    labs(title = title, x = "Number of field states (K)", y = y_label) +
+    paper_theme()
+}

@@ -22,3 +22,10 @@ Both R Markdown documents read `reports/manifests/paper_report_manifest.csv` or 
 - `reports/supplementary_figures/`
 
 The Python package no longer owns manuscript figure rendering.
+
+`scripts/02_supplementary_figures.Rmd` also renders the maintained field-state model-order support figure family when these supplementary tables exist:
+
+- `field_state_model_order_subject`
+- `field_state_model_order_group`
+
+That figure family is intended to support the manuscript statement that retained `K=4` remains the main-text default because fit, gain, stability, and interpretability collectively support it better than a single elbow heuristic.

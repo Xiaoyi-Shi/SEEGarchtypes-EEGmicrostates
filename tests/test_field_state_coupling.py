@@ -23,6 +23,8 @@ from seeg_eegmicrostates.coupling import (
     project_field_state_templates_to_common_space,
     summarize_group_archetype_conditioned_eeg_maps,
     summarize_group_archetype_template_similarity,
+    summarize_group_field_state_model_order,
+    summarize_subject_field_state_model_order,
 )
 from seeg_eegmicrostates.workflows import pipelines
 
@@ -205,6 +207,52 @@ def test_derive_seeg_field_state_artifacts_returns_templates_labels_and_profiles
     assert not artifacts["profiles"].empty
     assert not artifacts["transition_profiles"].empty
     assert artifacts["templates"]["field_state"].nunique() == 2
+
+
+def test_subject_field_state_model_order_summary_reports_fit_and_stability(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
+    artifacts = _field_artifacts(cfg)
+    peak_maps = artifacts["peak_maps"].copy()
+    peak_maps["foreign_patient_only_channel"] = float("nan")
+
+    summary = summarize_subject_field_state_model_order(
+        peak_maps,
+        artifacts["templates"],
+        artifacts["profiles"],
+        patient_id="sub-01",
+        stability_seed=cfg.random_seed,
+    )
+
+    assert summary.loc[0, "n_states"] == 2
+    assert summary.loc[0, "mean_template_fit"] > 0.0
+    assert summary.loc[0, "split_half_stability"] > 0.0
+    assert summary.loc[0, "min_state_occupancy"] > 0.0
+    assert summary.loc[0, "min_state_peak_fraction"] > 0.0
+
+
+def test_group_field_state_model_order_summary_aggregates_subject_support() -> None:
+    subject_df = pd.DataFrame(
+        {
+            "patient_id": ["sub-01", "sub-02", "sub-01", "sub-02"],
+            "peak_metric": ["rms"] * 4,
+            "normalization": ["zscore"] * 4,
+            "n_states": [2, 2, 4, 4],
+            "min_duration_ms": [4] * 4,
+            "fit_gain_from_prev_k": [pd.NA, pd.NA, 0.05, 0.04],
+            "mean_template_fit": [0.80, 0.82, 0.85, 0.86],
+            "split_half_stability": [0.70, 0.72, 0.78, 0.79],
+            "min_state_occupancy": [0.40, 0.38, 0.20, 0.18],
+            "min_state_peak_fraction": [0.41, 0.39, 0.19, 0.17],
+            "occupancy_entropy": [0.98, 0.97, 0.92, 0.91],
+        }
+    )
+
+    summary = summarize_group_field_state_model_order(subject_df, retained_k=4)
+
+    assert summary["n_states"].tolist() == [2, 4]
+    assert summary.loc[summary["n_states"] == 4, "retained_main_text_default"].iloc[0]
+    assert summary.loc[summary["n_states"] == 4, "n_subjects"].iloc[0] == 2
+    assert summary.loc[summary["n_states"] == 4, "median_fit_gain_from_prev_k"].iloc[0] > 0.0
 
 
 def test_sign_flipped_peak_maps_match_the_same_field_state(tmp_path: Path) -> None:
@@ -924,6 +972,36 @@ def test_run_exploratory_fine_lag_stage_reuses_cached_outputs(tmp_path: Path, mo
     assert outputs["group_peak_summary"] == cached["group_peak_summary"]
 
 
+def test_run_exploratory_field_state_model_order_stage_reuses_cached_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
+    branch = pipelines._exploratory_branch(
+        cfg,
+        "field-state-model-order-evaluation",
+        params={
+            "peak_metric": "rms",
+            "normalization": "zscore",
+            "min_duration_ms": cfg.min_microstate_duration_ms,
+            "candidate_ks": "2-3-4-5-6-7",
+        },
+    )
+    cached = {
+        "subject_summary": cfg.cache_path("coupling", "subject_field_state_model_order", ext="parquet", branch=branch),
+        "group_summary": cfg.cache_path("stats", "group_field_state_model_order", ext="parquet", branch=branch),
+    }
+    write_dataframe(pd.DataFrame({"patient_id": ["sub-01"], "n_states": [4]}), cached["subject_summary"])
+    write_dataframe(pd.DataFrame({"n_states": [4], "n_subjects": [7]}), cached["group_summary"])
+
+    outputs = pipelines.run_exploratory_coupling_stage(cfg, analysis="field-state-model-order-evaluation")
+
+    assert outputs["subject_summary"] == cached["subject_summary"]
+    assert outputs["group_summary"] == cached["group_summary"]
+    assert outputs["subject_summary_excel"].exists()
+    assert outputs["group_summary_excel"].exists()
+
+
 def test_render_reports_discovers_field_state_outputs(tmp_path: Path) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260407_190000")
     artifact_branch = pipelines._exploratory_branch(
@@ -1440,6 +1518,152 @@ def test_render_reports_discovers_field_state_outputs(tmp_path: Path) -> None:
     assert any(path.parent.name == "supplementary_tables" and "gfp_controlled_field_state_to_eeg_switching" in path.name for path in output_paths)
     assert not any(path.parent.name.endswith("figures") for path in output_paths)
     assert not any("gfp_controlled_field_state_switching" in path.name for path in output_paths)
+
+
+def test_export_paper_tables_includes_field_state_model_order_outputs(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260409_010000")
+    branch = pipelines._exploratory_branch(
+        cfg,
+        "field-state-model-order-evaluation",
+        params={
+            "peak_metric": "rms",
+            "normalization": "zscore",
+            "min_duration_ms": cfg.min_microstate_duration_ms,
+            "candidate_ks": "2-3-4-5-6-7",
+        },
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "patient_id": ["sub-01", "sub-01"],
+                "peak_metric": ["rms", "rms"],
+                "normalization": ["zscore", "zscore"],
+                "n_states": [2, 4],
+                "min_duration_ms": [cfg.min_microstate_duration_ms, cfg.min_microstate_duration_ms],
+                "n_channels": [4, 4],
+                "n_peak_maps_total": [20, 20],
+                "mean_template_fit": [0.80, 0.85],
+                "median_template_fit": [0.80, 0.85],
+                "min_template_fit": [0.70, 0.75],
+                "fit_gain_from_prev_k": [pd.NA, 0.05],
+                "split_half_stability": [0.72, 0.81],
+                "min_state_occupancy": [0.42, 0.18],
+                "max_state_occupancy": [0.58, 0.31],
+                "min_state_peak_fraction": [0.40, 0.17],
+                "max_state_peak_fraction": [0.60, 0.33],
+                "occupancy_entropy": [0.98, 0.92],
+                "k_range": ["2-7", "2-7"],
+                "retained_main_text_default": [False, True],
+            }
+        ),
+        cfg.cache_path("coupling", "subject_field_state_model_order", ext="parquet", branch=branch),
+    )
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "peak_metric": ["rms", "rms"],
+                "normalization": ["zscore", "zscore"],
+                "n_states": [2, 4],
+                "min_duration_ms": [cfg.min_microstate_duration_ms, cfg.min_microstate_duration_ms],
+                "k_range": ["2-7", "2-7"],
+                "retained_main_text_default": [False, True],
+                "n_subjects": [7, 7],
+                "mean_template_fit": [0.80, 0.85],
+                "median_template_fit": [0.80, 0.85],
+                "mean_fit_gain_from_prev_k": [pd.NA, 0.05],
+                "median_fit_gain_from_prev_k": [pd.NA, 0.05],
+                "mean_split_half_stability": [0.72, 0.81],
+                "median_split_half_stability": [0.72, 0.81],
+                "mean_min_state_occupancy": [0.42, 0.18],
+                "median_min_state_occupancy": [0.42, 0.18],
+                "mean_min_state_peak_fraction": [0.40, 0.17],
+                "median_min_state_peak_fraction": [0.40, 0.17],
+                "mean_occupancy_entropy": [0.98, 0.92],
+                "median_occupancy_entropy": [0.98, 0.92],
+            }
+        ),
+        cfg.cache_path("stats", "group_field_state_model_order", ext="parquet", branch=branch),
+    )
+
+    outputs = pipelines.export_paper_tables(cfg)
+    output_paths = list(outputs.values())
+
+    assert any(path.parent.name == "supplementary_tables" and "field_state_model_order_subject" in path.name for path in output_paths)
+    assert any(path.parent.name == "supplementary_tables" and "field_state_model_order_group" in path.name for path in output_paths)
+
+
+def test_export_paper_tables_keeps_only_retained_field_state_shared_branch(tmp_path: Path) -> None:
+    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", run_timestamp="20260409_020000")
+    retained_branch = pipelines._retained_field_state_artifact_branch(cfg)
+    alternate_branch = pipelines._field_state_artifact_branch(
+        cfg,
+        peak_metric="rms",
+        normalization="zscore",
+        state_count=2,
+        min_duration_ms=cfg.min_microstate_duration_ms,
+    )
+
+    def _write_field_state_shared(branch: str, n_states: int) -> None:
+        template_df = pd.DataFrame(
+            {
+                "patient_id": ["sub-01"] * n_states,
+                "field_state": list(range(n_states)),
+                "peak_metric": ["rms"] * n_states,
+                "normalization": ["zscore"] * n_states,
+                "n_states": [n_states] * n_states,
+                "min_duration_ms": [cfg.min_microstate_duration_ms] * n_states,
+                "A1-A2": [0.6 - index * 0.1 for index in range(n_states)],
+                "A2-A3": [-0.4 + index * 0.05 for index in range(n_states)],
+            }
+        )
+        profile_df = pd.DataFrame(
+            {
+                "patient_id": ["sub-01"] * n_states,
+                "field_state": list(range(n_states)),
+                "occupancy": [1.0 / n_states] * n_states,
+                "mean_dwell_sec": [0.1] * n_states,
+                "n_samples": [100] * n_states,
+                "n_runs": [1] * n_states,
+                "peak_metric": ["rms"] * n_states,
+                "normalization": ["zscore"] * n_states,
+                "n_states": [n_states] * n_states,
+                "min_duration_ms": [cfg.min_microstate_duration_ms] * n_states,
+            }
+        )
+        transition_df = pd.DataFrame(
+            {
+                "patient_id": ["sub-01"],
+                "from_state": [0],
+                "to_state": [min(1, n_states - 1)],
+                "n_transitions": [12],
+                "transition_probability": [0.5],
+                "peak_metric": ["rms"],
+                "normalization": ["zscore"],
+                "n_states": [n_states],
+                "min_duration_ms": [cfg.min_microstate_duration_ms],
+            }
+        )
+        write_dataframe(template_df, cfg.cache_path("coupling", "field_state_templates", ext="parquet", branch=branch))
+        write_dataframe(profile_df, cfg.cache_path("coupling", "field_state_profiles", ext="parquet", branch=branch))
+        write_dataframe(
+            transition_df,
+            cfg.cache_path("coupling", "field_state_transition_profiles", ext="parquet", branch=branch),
+        )
+
+    _write_field_state_shared(retained_branch, n_states=cfg.microstate_k)
+    _write_field_state_shared(alternate_branch, n_states=2)
+
+    outputs = pipelines.export_paper_tables(cfg)
+    output_paths = list(outputs.values())
+
+    retained_paths = [
+        path
+        for path in output_paths
+        if path.parent.name == "main_tables" and "subject_field_state_profiles" in path.name
+    ]
+    assert len(retained_paths) == 2
+    assert all(retained_branch in path.name for path in retained_paths)
+    assert all(alternate_branch not in path.name for path in output_paths)
 
 
 def test_render_reports_discovers_archetype_conditioned_eeg_topography_outputs(tmp_path: Path) -> None:

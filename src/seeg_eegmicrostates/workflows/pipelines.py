@@ -8,6 +8,7 @@ from seeg_eegmicrostates._utils import config_hash, read_dataframe, write_csv_da
 from seeg_eegmicrostates.config import AnalysisConfig
 from seeg_eegmicrostates.coupling import (
     DEFAULT_FINE_FIELD_LAG_WINDOW_MS,
+    DEFAULT_FIELD_STATE_MODEL_ORDER_RANGE,
     DEFAULT_FIELD_STATE_NORMALIZATION,
     DEFAULT_FIELD_STATE_PEAK_METRIC,
     DEFAULT_FIELD_STATE_SURROGATES,
@@ -70,6 +71,8 @@ from seeg_eegmicrostates.coupling import (
     sample_period_from_times,
     summarize_group_archetype_conditioned_eeg_maps,
     summarize_group_archetype_template_similarity,
+    summarize_group_field_state_model_order,
+    summarize_subject_field_state_model_order,
     summarize_subject_fine_lag_profile,
 )
 from seeg_eegmicrostates.eeg import (
@@ -154,6 +157,8 @@ _FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM = "subject_field_state_to_eeg_switchi
 _FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM = "group_field_state_to_eeg_switching"
 _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_SUBJECT_STEM = "subject_gfp_controlled_field_state_to_eeg_switching"
 _GFP_CONTROLLED_FIELD_STATE_TO_EEG_SWITCHING_GROUP_STEM = "group_gfp_controlled_field_state_to_eeg_switching"
+_FIELD_STATE_MODEL_ORDER_SUBJECT_STEM = "subject_field_state_model_order"
+_FIELD_STATE_MODEL_ORDER_GROUP_STEM = "group_field_state_model_order"
 _ARCHETYPE_EEG_MAP_SUBJECT_STEM = "subject_archetype_conditioned_eeg_maps"
 _ARCHETYPE_EEG_MAP_GROUP_STEM = "group_archetype_conditioned_eeg_maps"
 _ARCHETYPE_EEG_SIMILARITY_SUBJECT_STEM = "subject_archetype_eeg_template_similarity"
@@ -281,6 +286,16 @@ def _field_state_artifact_branch(
     )
 
 
+def _retained_field_state_artifact_branch(cfg: AnalysisConfig) -> str:
+    return _field_state_artifact_branch(
+        cfg,
+        peak_metric=DEFAULT_FIELD_STATE_PEAK_METRIC,
+        normalization=DEFAULT_FIELD_STATE_NORMALIZATION,
+        state_count=_resolve_field_state_count(None, cfg),
+        min_duration_ms=_resolve_field_min_duration_ms(None, cfg),
+    )
+
+
 def _field_state_archetype_artifact_branch(
     cfg: AnalysisConfig,
     *,
@@ -299,6 +314,26 @@ def _field_state_archetype_artifact_branch(
             "state_count": int(state_count),
             "min_duration_ms": int(min_duration_ms),
             "comparison_space": normalize_field_archetype_space(comparison_space),
+        },
+    )
+
+
+def _field_state_model_order_branch(
+    cfg: AnalysisConfig,
+    *,
+    peak_metric: str,
+    normalization: str,
+    min_duration_ms: int,
+    candidate_ks: tuple[int, ...],
+) -> str:
+    return _exploratory_branch(
+        cfg,
+        "field-state-model-order-evaluation",
+        params={
+            "peak_metric": normalize_field_peak_metric(peak_metric),
+            "normalization": normalize_field_normalization(normalization),
+            "min_duration_ms": int(min_duration_ms),
+            "candidate_ks": "-".join(str(value) for value in candidate_ks),
         },
     )
 
@@ -523,6 +558,27 @@ def _paper_ready_group_rows(df: pd.DataFrame, *, min_subjects: int) -> pd.DataFr
     return filtered.reset_index(drop=True)
 
 
+def _finalize_field_state_model_order_subject_table(
+    subject_df: pd.DataFrame,
+    *,
+    candidate_ks: tuple[int, ...],
+    retained_k: int,
+) -> pd.DataFrame:
+    if subject_df.empty:
+        return subject_df.copy()
+    data = subject_df.copy().sort_values(["patient_id", "n_states"]).reset_index(drop=True)
+    data["fit_gain_from_prev_k"] = pd.NA
+    grouped = data.groupby("patient_id", sort=False)
+    for _, index in grouped.groups.items():
+        patient_rows = data.loc[index].sort_values("n_states")
+        gain = patient_rows["mean_template_fit"].astype(float).diff()
+        data.loc[patient_rows.index, "fit_gain_from_prev_k"] = gain.to_numpy()
+    data["fit_gain_from_prev_k"] = pd.to_numeric(data["fit_gain_from_prev_k"], errors="coerce")
+    data["k_range"] = f"{candidate_ks[0]}-{candidate_ks[-1]}"
+    data["retained_main_text_default"] = data["n_states"].astype(int) == int(retained_k)
+    return data
+
+
 def _append_manifest_row(
     manifest_rows: list[dict[str, object]],
     *,
@@ -551,6 +607,7 @@ def _append_manifest_row(
         "normalization",
         "n_states",
         "min_duration_ms",
+        "k_range",
         "comparison_space",
         "global_metric_label",
         "metric_definition",
@@ -724,10 +781,12 @@ def _render_paper_field_state_core(
     counters: dict[str, int],
 ) -> None:
     state_label = cfg.analysis_state.replace("_", " ")
-    for branch, template_path in _discover_branch_paths(cfg, "coupling", _FIELD_STATE_TEMPLATES_STEM, ext="parquet"):
+    branch = _retained_field_state_artifact_branch(cfg)
+    template_path = cfg.cache_path("coupling", _FIELD_STATE_TEMPLATES_STEM, ext="parquet", branch=branch)
+    if template_path.exists():
         template_df = read_dataframe(template_path)
         if template_df.empty:
-            continue
+            return
         profile_path = cfg.cache_path("coupling", _FIELD_STATE_PROFILES_STEM, ext="parquet", branch=branch)
         transition_path = cfg.cache_path("coupling", _FIELD_STATE_TRANSITION_PROFILES_STEM, ext="parquet", branch=branch)
         source_paths = tuple(path for path in (template_path, profile_path, transition_path) if path.exists())
@@ -824,8 +883,8 @@ def _render_paper_field_state_core(
                 family="field-state-shared",
                 label=f"subject_field_state_transition_profiles_{branch}",
                 analysis_branch=branch,
-                source_paths=(transition_path,),
-            )
+                    source_paths=(transition_path,),
+                )
 
     for branch, group_path in _discover_branch_paths(cfg, "stats", _FIELD_STATE_GROUP_STEM, ext="parquet"):
         group_df = _paper_ready_group_rows(read_dataframe(group_path), min_subjects=cfg.min_group_subjects)
@@ -1667,6 +1726,101 @@ def _render_paper_supplementary_followups(
                 analysis_branch=branch,
                 source_paths=(group_path,),
             )
+
+    for branch, group_path in _discover_branch_paths(cfg, "stats", _FIELD_STATE_MODEL_ORDER_GROUP_STEM, ext="parquet"):
+        group_df = _paper_ready_group_rows(read_dataframe(group_path), min_subjects=cfg.min_group_subjects)
+        if group_df.empty:
+            continue
+        subject_path = cfg.cache_path("coupling", _FIELD_STATE_MODEL_ORDER_SUBJECT_STEM, ext="parquet", branch=branch)
+        if subject_path.exists():
+            subject_df = _stable_columns(
+                _traceable_dataframe(
+                    read_dataframe(subject_path),
+                    family="field-state-model-order-evaluation",
+                    branch=branch,
+                    source_path=subject_path,
+                ),
+                (
+                    "analysis_family",
+                    "analysis_branch",
+                    "source_cache",
+                    "patient_id",
+                    "n_states",
+                    "k_range",
+                    "retained_main_text_default",
+                    "mean_template_fit",
+                    "median_template_fit",
+                    "min_template_fit",
+                    "fit_gain_from_prev_k",
+                    "split_half_stability",
+                    "min_state_occupancy",
+                    "max_state_occupancy",
+                    "min_state_peak_fraction",
+                    "max_state_peak_fraction",
+                    "occupancy_entropy",
+                    "n_channels",
+                    "n_peak_maps_total",
+                    "peak_metric",
+                    "normalization",
+                    "min_duration_ms",
+                ),
+            )
+            _emit_manuscript_table(
+                cfg,
+                outputs=outputs,
+                manifest_rows=manifest_rows,
+                counters=counters,
+                dataframe=subject_df,
+                bundle="supplementary",
+                family="field-state-model-order-evaluation",
+                label=f"field_state_model_order_subject_{branch}",
+                analysis_branch=branch,
+                source_paths=(subject_path,),
+            )
+        group_table = _stable_columns(
+            _traceable_dataframe(
+                group_df,
+                family="field-state-model-order-evaluation",
+                branch=branch,
+                source_path=group_path,
+            ),
+            (
+                "analysis_family",
+                "analysis_branch",
+                "source_cache",
+                "n_states",
+                "k_range",
+                "retained_main_text_default",
+                "n_subjects",
+                "mean_template_fit",
+                "median_template_fit",
+                "mean_fit_gain_from_prev_k",
+                "median_fit_gain_from_prev_k",
+                "mean_split_half_stability",
+                "median_split_half_stability",
+                "mean_min_state_occupancy",
+                "median_min_state_occupancy",
+                "mean_min_state_peak_fraction",
+                "median_min_state_peak_fraction",
+                "mean_occupancy_entropy",
+                "median_occupancy_entropy",
+                "peak_metric",
+                "normalization",
+                "min_duration_ms",
+            ),
+        )
+        _emit_manuscript_table(
+            cfg,
+            outputs=outputs,
+            manifest_rows=manifest_rows,
+            counters=counters,
+            dataframe=group_table,
+            bundle="supplementary",
+            family="field-state-model-order-evaluation",
+            label=f"field_state_model_order_group_{branch}",
+            analysis_branch=branch,
+            source_paths=(group_path,),
+        )
 
 
 def _render_manuscript_reports(cfg: AnalysisConfig) -> dict[str, Path]:
@@ -3024,6 +3178,106 @@ def run_exploratory_lagged_field_state_coupling_stage(
         "group_effects": group_path,
         "subject_effects_excel": tables[_LAGGED_FIELD_STATE_SUBJECT_STEM],
         "group_effects_excel": tables[_LAGGED_FIELD_STATE_GROUP_STEM],
+    }
+
+
+def run_exploratory_field_state_model_order_stage(
+    cfg: AnalysisConfig,
+    *,
+    field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
+    field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
+    field_min_duration_ms: int | None = None,
+    min_subjects: int | None = None,
+) -> dict[str, Path]:
+    cfg.ensure_cache_directories()
+    normalized_metric = normalize_field_peak_metric(field_peak_metric)
+    normalized_strategy = normalize_field_normalization(field_normalization)
+    min_duration_ms = _resolve_field_min_duration_ms(field_min_duration_ms, cfg)
+    threshold = _exploratory_min_subjects(min_subjects, cfg)
+    candidate_ks = DEFAULT_FIELD_STATE_MODEL_ORDER_RANGE
+    retained_k = _resolve_field_state_count(None, cfg)
+    branch = _field_state_model_order_branch(
+        cfg,
+        peak_metric=normalized_metric,
+        normalization=normalized_strategy,
+        min_duration_ms=min_duration_ms,
+        candidate_ks=candidate_ks,
+    )
+    cached = {
+        "subject_summary": cfg.cache_path("coupling", _FIELD_STATE_MODEL_ORDER_SUBJECT_STEM, ext="parquet", branch=branch),
+        "group_summary": cfg.cache_path("stats", _FIELD_STATE_MODEL_ORDER_GROUP_STEM, ext="parquet", branch=branch),
+    }
+    if _all_exist(cached):
+        tables = _write_table_reports_from_paths(
+            cfg,
+            {
+                _FIELD_STATE_MODEL_ORDER_SUBJECT_STEM: cached["subject_summary"],
+                _FIELD_STATE_MODEL_ORDER_GROUP_STEM: cached["group_summary"],
+            },
+            branch=branch,
+        )
+        return {
+            **cached,
+            "subject_summary_excel": tables[_FIELD_STATE_MODEL_ORDER_SUBJECT_STEM],
+            "group_summary_excel": tables[_FIELD_STATE_MODEL_ORDER_GROUP_STEM],
+        }
+
+    subject_frames: list[pd.DataFrame] = []
+    for k_index, candidate_k in enumerate(candidate_ks):
+        _, state_paths = _ensure_seeg_field_state_artifacts(
+            cfg,
+            peak_metric=normalized_metric,
+            normalization=normalized_strategy,
+            state_count=int(candidate_k),
+            min_duration_ms=min_duration_ms,
+        )
+        peak_maps_df = read_dataframe(state_paths["peak_maps"])
+        template_df = read_dataframe(state_paths["templates"])
+        profile_df = read_dataframe(state_paths["profiles"])
+        patient_ids = sorted(
+            {
+                *peak_maps_df.get("patient_id", pd.Series(dtype=str)).astype(str).tolist(),
+                *template_df.get("patient_id", pd.Series(dtype=str)).astype(str).tolist(),
+                *profile_df.get("patient_id", pd.Series(dtype=str)).astype(str).tolist(),
+            }
+        )
+        for patient_offset, patient_id in enumerate(patient_ids):
+            subject_frames.append(
+                summarize_subject_field_state_model_order(
+                    peak_maps_df[peak_maps_df["patient_id"].astype(str) == patient_id].copy(),
+                    template_df[template_df["patient_id"].astype(str) == patient_id].copy(),
+                    profile_df[profile_df["patient_id"].astype(str) == patient_id].copy(),
+                    patient_id=patient_id,
+                    stability_seed=cfg.random_seed + (k_index * 1000) + patient_offset,
+                )
+            )
+
+    subject_summary = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
+    subject_summary = _finalize_field_state_model_order_subject_table(
+        subject_summary,
+        candidate_ks=candidate_ks,
+        retained_k=retained_k,
+    )
+    group_summary = summarize_group_field_state_model_order(subject_summary, retained_k=retained_k)
+    if not group_summary.empty:
+        group_summary.insert(4, "k_range", f"{candidate_ks[0]}-{candidate_ks[-1]}")
+        group_summary = _paper_ready_group_rows(group_summary, min_subjects=threshold)
+
+    subject_path = write_dataframe(subject_summary, cached["subject_summary"])
+    group_path = write_dataframe(group_summary, cached["group_summary"])
+    tables = _write_table_reports(
+        cfg,
+        {
+            _FIELD_STATE_MODEL_ORDER_SUBJECT_STEM: subject_summary,
+            _FIELD_STATE_MODEL_ORDER_GROUP_STEM: group_summary,
+        },
+        branch=branch,
+    )
+    return {
+        "subject_summary": subject_path,
+        "group_summary": group_path,
+        "subject_summary_excel": tables[_FIELD_STATE_MODEL_ORDER_SUBJECT_STEM],
+        "group_summary_excel": tables[_FIELD_STATE_MODEL_ORDER_GROUP_STEM],
     }
 
 
@@ -5028,6 +5282,14 @@ def run_exploratory_coupling_stage(
             field_state_count=field_state_count,
             field_min_duration_ms=field_min_duration_ms,
             transition_window_sec=transition_window_sec,
+            min_subjects=min_subjects,
+        )
+    if selected == "field-state-model-order-evaluation":
+        return run_exploratory_field_state_model_order_stage(
+            cfg,
+            field_peak_metric=field_peak_metric,
+            field_normalization=field_normalization,
+            field_min_duration_ms=field_min_duration_ms,
             min_subjects=min_subjects,
         )
     if selected == "field-state-archetypes":
