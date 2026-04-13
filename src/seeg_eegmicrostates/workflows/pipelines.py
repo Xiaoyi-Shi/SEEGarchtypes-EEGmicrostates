@@ -193,33 +193,17 @@ _PAPER_CORE_EXPLORATORY_ANALYSES = (
     "fine-lag-field-state-coupling",
 )
 _SUPPLEMENTARY_EXPLORATORY_ANALYSES = (
+    "field-state-model-order-evaluation",
     "gfp-global-coupling",
-    "lagged-gfp-global-coupling",
     "peak-gfp-global-coupling",
     "gfp-controlled-microstate",
     "gfp-controlled-transition",
     "field-state-to-eeg-switching",
     "gfp-controlled-field-state-to-eeg-switching",
 )
-_LEGACY_INTERNAL_EXPLORATORY_ANALYSES = (
-    "event-activity",
-    "event-connectivity",
-    "windowed-coupling",
-    "transition-coupling",
-    "direct-state-coupling",
-    "lagged-state-coupling",
-    "transition-state-coupling",
-    "lagged-field-state-coupling",
-    "transition-field-state-coupling",
-    "gfp-controlled-field-state-switching",
-)
 _MAINTAINED_EXPLORATORY_ANALYSES = (
     *_PAPER_CORE_EXPLORATORY_ANALYSES,
     *_SUPPLEMENTARY_EXPLORATORY_ANALYSES,
-)
-_ALL_EXPLORATORY_ANALYSES = (
-    *_MAINTAINED_EXPLORATORY_ANALYSES,
-    *_LEGACY_INTERNAL_EXPLORATORY_ANALYSES,
 )
 _PAPER_REPORT_BRANCH = "paper_workflow"
 _MAIN_FIGURE_SUBDIR = "main_figures"
@@ -1594,7 +1578,6 @@ def _render_paper_supplementary_followups(
     state_label = cfg.analysis_state.replace("_", " ")
     group_families: tuple[tuple[str, str, str, str], ...] = (
         (_GFP_GLOBAL_GROUP_STEM, "gfp-global-coupling", "gfp_global_coupling", "lag"),
-        (_LAGGED_GFP_GLOBAL_GROUP_STEM, "lagged-gfp-global-coupling", "lagged_gfp_global_coupling", "lag"),
         (_PEAK_GFP_GLOBAL_GROUP_STEM, "peak-gfp-global-coupling", "peak_gfp_global_coupling", "offset"),
         (_GFP_CONTROLLED_MICROSTATE_GROUP_OMNIBUS_STEM, "gfp-controlled-microstate", "gfp_controlled_microstate", "heatmap"),
         (_GFP_CONTROLLED_TRANSITION_GROUP_STEM, "gfp-controlled-transition", "gfp_controlled_transition", "transition"),
@@ -5073,7 +5056,6 @@ def run_exploratory_coupling_stage(
     cfg: AnalysisConfig,
     *,
     analysis: str = "all",
-    method: str = "all",
     field_peak_metric: str = DEFAULT_FIELD_STATE_PEAK_METRIC,
     field_normalization: str = DEFAULT_FIELD_STATE_NORMALIZATION,
     field_state_count: int | None = None,
@@ -5081,18 +5063,10 @@ def run_exploratory_coupling_stage(
     field_archetype_space: str = YEO17_PARCELLATION_NAME,
     global_metric: str = DEFAULT_GFP_GLOBAL_METRIC,
     global_weighting: str = DEFAULT_GFP_GLOBAL_WEIGHTING,
-    event_window_sec: float = 1.0,
-    window_sec: float = 10.0,
     peak_window_sec: float | None = None,
     transition_window_sec: float | None = None,
-    direct_backend: str = "pca-kmeans",
-    direct_state_count: int | None = None,
-    direct_components: int | None = None,
     field_surrogates: int | None = None,
     fine_lag_window_ms: int | None = None,
-    max_lag_ms: int | None = None,
-    lag_step_ms: int | None = None,
-    direct_surrogates: int | None = None,
     global_surrogates: int | None = None,
     min_subjects: int | None = None,
 ) -> dict[str, Path]:
@@ -5101,13 +5075,8 @@ def run_exploratory_coupling_stage(
         outputs: dict[str, Path] = {}
         for item in _MAINTAINED_EXPLORATORY_ANALYSES:
             kwargs = {
-                "event_window_sec": event_window_sec,
-                "window_sec": window_sec,
                 "peak_window_sec": peak_window_sec,
                 "transition_window_sec": transition_window_sec,
-                "direct_backend": direct_backend,
-                "direct_state_count": direct_state_count,
-                "direct_components": direct_components,
                 "field_peak_metric": field_peak_metric,
                 "field_normalization": field_normalization,
                 "field_state_count": field_state_count,
@@ -5115,14 +5084,10 @@ def run_exploratory_coupling_stage(
                 "field_archetype_space": field_archetype_space,
                 "field_surrogates": field_surrogates,
                 "fine_lag_window_ms": fine_lag_window_ms,
-                "max_lag_ms": max_lag_ms,
-                "lag_step_ms": lag_step_ms,
-                "direct_surrogates": direct_surrogates,
                 "global_metric": global_metric,
                 "global_weighting": global_weighting,
                 "global_surrogates": global_surrogates,
                 "min_subjects": min_subjects,
-                "method": method,
             }
             stage_outputs = run_exploratory_coupling_stage(cfg, analysis=item, **kwargs)
             prefix = cfg.branch_name(item)
@@ -5131,7 +5096,6 @@ def run_exploratory_coupling_stage(
         return outputs
     gfp_analyses = {
         "gfp-global-coupling",
-        "lagged-gfp-global-coupling",
         "peak-gfp-global-coupling",
         "gfp-controlled-microstate",
         "gfp-controlled-transition",
@@ -5149,16 +5113,10 @@ def run_exploratory_coupling_stage(
                 stage_outputs = run_exploratory_coupling_stage(
                     cfg,
                     analysis=selected,
-                    method=method,
                     global_metric=metric_definition,
                     global_weighting=weighting_strategy,
-                    event_window_sec=event_window_sec,
-                    window_sec=window_sec,
                     peak_window_sec=peak_window_sec,
                     transition_window_sec=transition_window_sec,
-                    direct_backend=direct_backend,
-                    direct_state_count=direct_state_count,
-                    direct_components=direct_components,
                     field_peak_metric=field_peak_metric,
                     field_normalization=field_normalization,
                     field_state_count=field_state_count,
@@ -5166,9 +5124,6 @@ def run_exploratory_coupling_stage(
                     field_archetype_space=field_archetype_space,
                     field_surrogates=field_surrogates,
                     fine_lag_window_ms=fine_lag_window_ms,
-                    max_lag_ms=max_lag_ms,
-                    lag_step_ms=lag_step_ms,
-                    direct_surrogates=direct_surrogates,
                     global_surrogates=global_surrogates,
                     min_subjects=min_subjects,
                 )
@@ -5176,49 +5131,6 @@ def run_exploratory_coupling_stage(
                 for key, value in stage_outputs.items():
                     outputs[f"{combo_prefix}_{key}"] = value
         return outputs
-    if selected == "event-activity":
-        return run_exploratory_event_activity_stage(cfg, event_window_sec=event_window_sec, min_subjects=min_subjects)
-    if selected == "event-connectivity":
-        return run_exploratory_event_connectivity_stage(
-            cfg,
-            method=method,
-            event_window_sec=event_window_sec,
-            min_subjects=min_subjects,
-        )
-    if selected == "windowed-coupling":
-        return run_exploratory_windowed_coupling_stage(cfg, window_sec=window_sec, min_subjects=min_subjects)
-    if selected == "transition-coupling":
-        return run_exploratory_transition_coupling_stage(cfg, event_window_sec=event_window_sec, min_subjects=min_subjects)
-    if selected == "direct-state-coupling":
-        return run_exploratory_direct_state_coupling_stage(
-            cfg,
-            direct_backend=direct_backend,
-            direct_state_count=direct_state_count,
-            direct_components=direct_components,
-            direct_surrogates=direct_surrogates,
-            min_subjects=min_subjects,
-        )
-    if selected == "lagged-state-coupling":
-        return run_exploratory_lagged_state_coupling_stage(
-            cfg,
-            direct_backend=direct_backend,
-            direct_state_count=direct_state_count,
-            direct_components=direct_components,
-            max_lag_ms=max_lag_ms,
-            lag_step_ms=lag_step_ms,
-            direct_surrogates=direct_surrogates,
-            min_subjects=min_subjects,
-        )
-    if selected == "transition-state-coupling":
-        return run_exploratory_transition_state_coupling_stage(
-            cfg,
-            direct_backend=direct_backend,
-            direct_state_count=direct_state_count,
-            direct_components=direct_components,
-            transition_window_sec=transition_window_sec,
-            direct_surrogates=direct_surrogates,
-            min_subjects=min_subjects,
-        )
     if selected == "field-state-coupling":
         return run_exploratory_field_state_coupling_stage(
             cfg,
@@ -5226,18 +5138,6 @@ def run_exploratory_coupling_stage(
             field_normalization=field_normalization,
             field_state_count=field_state_count,
             field_min_duration_ms=field_min_duration_ms,
-            field_surrogates=field_surrogates,
-            min_subjects=min_subjects,
-        )
-    if selected == "lagged-field-state-coupling":
-        return run_exploratory_lagged_field_state_coupling_stage(
-            cfg,
-            field_peak_metric=field_peak_metric,
-            field_normalization=field_normalization,
-            field_state_count=field_state_count,
-            field_min_duration_ms=field_min_duration_ms,
-            max_lag_ms=max_lag_ms,
-            lag_step_ms=lag_step_ms,
             field_surrogates=field_surrogates,
             min_subjects=min_subjects,
         )
@@ -5252,17 +5152,6 @@ def run_exploratory_coupling_stage(
             field_surrogates=field_surrogates,
             min_subjects=min_subjects,
         )
-    if selected == "transition-field-state-coupling":
-        return run_exploratory_transition_field_state_coupling_stage(
-            cfg,
-            field_peak_metric=field_peak_metric,
-            field_normalization=field_normalization,
-            field_state_count=field_state_count,
-            field_min_duration_ms=field_min_duration_ms,
-            transition_window_sec=transition_window_sec,
-            field_surrogates=field_surrogates,
-            min_subjects=min_subjects,
-        )
     if selected == "field-state-to-eeg-switching":
         return run_exploratory_field_state_to_eeg_switching_stage(
             cfg,
@@ -5272,16 +5161,6 @@ def run_exploratory_coupling_stage(
             field_min_duration_ms=field_min_duration_ms,
             transition_window_sec=transition_window_sec,
             field_surrogates=field_surrogates,
-            min_subjects=min_subjects,
-        )
-    if selected == "gfp-controlled-field-state-switching":
-        return run_exploratory_gfp_controlled_field_state_switching_stage(
-            cfg,
-            field_peak_metric=field_peak_metric,
-            field_normalization=field_normalization,
-            field_state_count=field_state_count,
-            field_min_duration_ms=field_min_duration_ms,
-            transition_window_sec=transition_window_sec,
             min_subjects=min_subjects,
         )
     if selected == "field-state-model-order-evaluation":
@@ -5333,16 +5212,6 @@ def run_exploratory_coupling_stage(
             global_surrogates=global_surrogates,
             min_subjects=min_subjects,
         )
-    if selected == "lagged-gfp-global-coupling":
-        return run_exploratory_lagged_gfp_global_coupling_stage(
-            cfg,
-            global_metric=global_metric,
-            global_weighting=global_weighting,
-            max_lag_ms=max_lag_ms,
-            lag_step_ms=lag_step_ms,
-            global_surrogates=global_surrogates,
-            min_subjects=min_subjects,
-        )
     if selected == "peak-gfp-global-coupling":
         return run_exploratory_peak_gfp_global_coupling_stage(
             cfg,
@@ -5367,7 +5236,7 @@ def run_exploratory_coupling_stage(
             transition_window_sec=transition_window_sec,
             min_subjects=min_subjects,
         )
-    supported = ", ".join(["all", *_ALL_EXPLORATORY_ANALYSES])
+    supported = ", ".join(["all", *_MAINTAINED_EXPLORATORY_ANALYSES])
     raise ValueError(f"Unsupported exploratory analysis '{analysis}'. Expected one of: {supported}.")
 
 
@@ -6240,7 +6109,3 @@ def _render_reports_legacy(cfg: AnalysisConfig) -> dict[str, Path]:
 
 def export_paper_tables(cfg: AnalysisConfig) -> dict[str, Path]:
     return _render_manuscript_reports(cfg)
-
-
-def render_reports(cfg: AnalysisConfig) -> dict[str, Path]:
-    return export_paper_tables(cfg)

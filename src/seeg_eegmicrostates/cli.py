@@ -30,8 +30,6 @@ from seeg_eegmicrostates.coupling import (
 from seeg_eegmicrostates.workflows import (
     build_index_artifacts,
     export_paper_tables,
-    run_activity_effects_stage,
-    run_connectivity_effects_stage,
     run_eeg_states_stage,
     run_exploratory_coupling_stage,
     run_seeg_regions_stage,
@@ -45,7 +43,6 @@ _EXPLORATORY_ANALYSIS_CHOICES = (
     "archetype-conditioned-eeg-topography",
     "fine-lag-field-state-coupling",
     "gfp-global-coupling",
-    "lagged-gfp-global-coupling",
     "peak-gfp-global-coupling",
     "gfp-controlled-microstate",
     "gfp-controlled-transition",
@@ -91,20 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use an external EEG microstate template file. Without this override, the stage uses the configured default template at artifacts/cache/eeg/ModK.fif.",
     )
     subparsers.add_parser("run-seeg-regions", parents=common_parents, help="Generate reusable 1-40 Hz SEEG parcellation signals.")
-    subparsers.add_parser("run-activity-effects", parents=common_parents, help="Compute supplemental EEG-state-conditioned SEEG activity effects.")
-    connectivity_parser = subparsers.add_parser(
-        "run-connectivity-effects",
-        parents=common_parents,
-        help="Compute primary EEG-state-conditioned SEEG connectivity effects.",
-    )
-    connectivity_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
     exploratory_parser = subparsers.add_parser(
         "run-exploratory-coupling",
         parents=common_parents,
         help="Run the paper-focused SEEG field-state exploratory workflow plus supplementary GFP/global and SEEG-led switching follow-ups.",
     )
     exploratory_parser.add_argument("--analysis", default="all", choices=["all", *_EXPLORATORY_ANALYSIS_CHOICES])
-    exploratory_parser.add_argument("--method", default="all", choices=["corr", "plv", "wpli", "all"])
     exploratory_parser.add_argument(
         "--field-peak-metric",
         default=DEFAULT_FIELD_STATE_PEAK_METRIC,
@@ -249,15 +238,10 @@ def main(argv: list[str] | None = None) -> None:
             outputs = run_eeg_states_stage(cfg, template_fif=args.template_fif)
         elif args.command == "run-seeg-regions":
             outputs = run_seeg_regions_stage(cfg)
-        elif args.command == "run-activity-effects":
-            outputs = run_activity_effects_stage(cfg)
-        elif args.command == "run-connectivity-effects":
-            outputs = run_connectivity_effects_stage(cfg, method=args.method)
         elif args.command == "run-exploratory-coupling":
             outputs = run_exploratory_coupling_stage(
                 cfg,
                 analysis=args.analysis,
-                method=args.method,
                 global_metric=args.global_metric,
                 global_weighting=args.global_weighting,
                 peak_window_sec=args.peak_window_sec,

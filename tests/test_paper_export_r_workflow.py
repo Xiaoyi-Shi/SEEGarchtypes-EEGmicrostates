@@ -91,19 +91,16 @@ def test_r_markdown_scripts_render_from_standardized_table_exports(tmp_path: Pat
         "supplementary_table_10_gfp_global_coupling": pd.DataFrame(
             {"lag_ms": [0], "mean_effect": [0.12], "q_fdr": [0.001], "n_subjects": [8]}
         ),
-        "supplementary_table_11_lagged_gfp_global_coupling": pd.DataFrame(
-            {"lag_ms": [-4, 0, 4], "mean_effect": [0.09, 0.12, 0.08], "q_fdr": [0.02, 0.001, 0.02], "n_subjects": [8, 8, 8]}
-        ),
-        "supplementary_table_12_peak_gfp_global_coupling": pd.DataFrame(
+        "supplementary_table_11_peak_gfp_global_coupling": pd.DataFrame(
             {"offset_ms": [-4, 0, 4], "mean_effect": [-0.01, -0.02, -0.01], "q_fdr": [0.02, 0.01, 0.02], "n_subjects": [8, 8, 8]}
         ),
-        "supplementary_table_13_gfp_controlled_microstate": pd.DataFrame(
+        "supplementary_table_12_gfp_controlled_microstate": pd.DataFrame(
             {"global_metric_label": ["rms__equal"], "mean_state_0": [0.1], "mean_state_1": [0.2], "mean_state_2": [0.15], "mean_state_3": [0.3]}
         ),
-        "supplementary_table_14_gfp_controlled_transition": pd.DataFrame(
+        "supplementary_table_13_gfp_controlled_transition": pd.DataFrame(
             {"from_state": [0], "to_state": [1], "mean_effect": [0.05]}
         ),
-        "supplementary_table_15_field_state_model_order_subject": pd.DataFrame(
+        "supplementary_table_14_field_state_model_order_subject": pd.DataFrame(
             {
                 "patient_id": ["sub-01", "sub-01", "sub-02", "sub-02"],
                 "n_states": [2, 4, 2, 4],
@@ -114,7 +111,7 @@ def test_r_markdown_scripts_render_from_standardized_table_exports(tmp_path: Pat
                 "split_half_stability": [0.72, 0.80, 0.74, 0.82],
             }
         ),
-        "supplementary_table_16_field_state_model_order_group": pd.DataFrame(
+        "supplementary_table_15_field_state_model_order_group": pd.DataFrame(
             {
                 "n_states": [2, 4],
                 "k_range": ["2-7", "2-7"],
@@ -192,16 +189,13 @@ def test_supplementary_r_markdown_fails_clearly_when_model_order_tables_are_miss
         "supplementary_table_10_gfp_global_coupling": pd.DataFrame(
             {"lag_ms": [0], "mean_effect": [0.12], "q_fdr": [0.001], "n_subjects": [8]}
         ),
-        "supplementary_table_11_lagged_gfp_global_coupling": pd.DataFrame(
-            {"lag_ms": [0], "mean_effect": [0.12], "q_fdr": [0.001], "n_subjects": [8]}
-        ),
-        "supplementary_table_12_peak_gfp_global_coupling": pd.DataFrame(
+        "supplementary_table_11_peak_gfp_global_coupling": pd.DataFrame(
             {"offset_ms": [0], "mean_effect": [-0.02], "q_fdr": [0.01], "n_subjects": [8]}
         ),
-        "supplementary_table_13_gfp_controlled_microstate": pd.DataFrame(
+        "supplementary_table_12_gfp_controlled_microstate": pd.DataFrame(
             {"global_metric_label": ["rms__equal"], "mean_state_0": [0.1], "mean_state_1": [0.2], "mean_state_2": [0.15], "mean_state_3": [0.3]}
         ),
-        "supplementary_table_14_gfp_controlled_transition": pd.DataFrame(
+        "supplementary_table_13_gfp_controlled_transition": pd.DataFrame(
             {"from_state": [0], "to_state": [1], "mean_effect": [0.05]}
         ),
     }

@@ -1,9 +1,6 @@
 from .pipelines import (
     build_index_artifacts,
     export_paper_tables,
-    render_reports,
-    run_activity_effects_stage,
-    run_connectivity_effects_stage,
     run_eeg_states_stage,
     run_exploratory_coupling_stage,
     run_seeg_regions_stage,
@@ -12,9 +9,6 @@ from .pipelines import (
 __all__ = [
     "build_index_artifacts",
     "export_paper_tables",
-    "render_reports",
-    "run_activity_effects_stage",
-    "run_connectivity_effects_stage",
     "run_eeg_states_stage",
     "run_exploratory_coupling_stage",
     "run_seeg_regions_stage",

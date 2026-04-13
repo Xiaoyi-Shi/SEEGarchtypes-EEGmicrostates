@@ -785,67 +785,6 @@ def test_run_exploratory_field_state_to_eeg_switching_stage_writes_outputs(
     assert not gfp_group_df.empty
 
 
-def test_run_exploratory_gfp_controlled_field_state_switching_stage_writes_outputs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
-    labels_path = tmp_path / "labels.parquet"
-    gfp_trace_path = tmp_path / "gfp_trace.parquet"
-    gfp_peaks_path = tmp_path / "gfp_peaks.parquet"
-    transitions_path = tmp_path / "transitions.parquet"
-    artifacts = _field_artifacts(cfg)
-    field_paths = {
-        "trace": tmp_path / "field_trace.parquet",
-        "peaks": tmp_path / "field_peaks.parquet",
-        "peak_maps": tmp_path / "field_peak_maps.parquet",
-        "templates": tmp_path / "field_templates.parquet",
-        "labels": tmp_path / "field_labels.parquet",
-        "profiles": tmp_path / "field_profiles.parquet",
-        "transition_profiles": tmp_path / "field_transition_profiles.parquet",
-    }
-    write_dataframe(_eeg_labels(), labels_path)
-    write_dataframe(_gfp_trace(), gfp_trace_path)
-    write_dataframe(pd.DataFrame({"patient_id": ["sub-01"], "peak_id": [0], "event_sec": [0.008], "sample": [2], "gfp": [0.8]}), gfp_peaks_path)
-    write_dataframe(_eeg_transitions(), transitions_path)
-    for key, path in field_paths.items():
-        write_dataframe(artifacts[key], path)
-
-    monkeypatch.setattr(
-        pipelines,
-        "run_eeg_states_stage",
-        lambda *_args, **_kwargs: {"labels": labels_path, "gfp_trace": gfp_trace_path, "gfp_peaks": gfp_peaks_path},
-    )
-    monkeypatch.setattr(
-        pipelines,
-        "_ensure_exploratory_event_tables",
-        lambda *_args, **_kwargs: {"events": tmp_path / "events.parquet", "transitions": transitions_path},
-    )
-    monkeypatch.setattr(
-        pipelines,
-        "_ensure_seeg_field_state_artifacts",
-        lambda *_args, **_kwargs: ("field-state-shared", field_paths),
-    )
-    monkeypatch.setattr(pipelines, "_eligible_rows", lambda *_args, **_kwargs: pd.DataFrame({"patient_id": ["sub-01"]}))
-
-    outputs = pipelines.run_exploratory_coupling_stage(
-        cfg,
-        analysis="gfp-controlled-field-state-switching",
-        field_state_count=2,
-        transition_window_sec=0.012,
-        min_subjects=1,
-    )
-
-    subject_profiles = read_dataframe(outputs["subject_profiles"])
-    group_omnibus = read_dataframe(outputs["group_omnibus"])
-    subject_transition = read_dataframe(outputs["subject_transition_effects"])
-    group_transition = read_dataframe(outputs["group_transition_effects"])
-    assert set(subject_profiles.columns) >= {"adjusted_switch_rate", "gfp_beta"}
-    assert not group_omnibus.empty
-    assert not subject_transition.empty
-    assert not group_transition.empty
-
-
 def test_run_exploratory_field_state_stage_reuses_cached_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts")
     branch = pipelines._exploratory_branch(

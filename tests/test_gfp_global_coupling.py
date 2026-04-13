@@ -194,44 +194,6 @@ def test_run_exploratory_gfp_global_coupling_stage_writes_outputs(tmp_path: Path
     assert group_df["lag_ms"].tolist() == [0]
 
 
-def test_run_exploratory_lagged_gfp_global_coupling_stage_writes_multiple_lags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", seeg_parcellation_name="yeo17")
-    labels_path = tmp_path / "labels.parquet"
-    gfp_trace_path = tmp_path / "gfp_trace.parquet"
-    gfp_peaks_path = tmp_path / "gfp_peaks.parquet"
-    global_trace_path = tmp_path / "global_trace.parquet"
-    support_path = tmp_path / "network_support.parquet"
-    write_dataframe(_eeg_labels(), labels_path)
-    write_dataframe(_gfp_trace(), gfp_trace_path)
-    write_dataframe(_gfp_peaks(), gfp_peaks_path)
-    write_dataframe(_global_trace(), global_trace_path)
-    write_dataframe(_network_support(), support_path)
-
-    monkeypatch.setattr(
-        pipelines,
-        "run_eeg_states_stage",
-        lambda *_args, **_kwargs: {"labels": labels_path, "gfp_trace": gfp_trace_path, "gfp_peaks": gfp_peaks_path},
-    )
-    monkeypatch.setattr(
-        pipelines,
-        "_ensure_seeg_global_metric_artifacts",
-        lambda *_args, **_kwargs: ("gfp-shared", {"global_trace": global_trace_path, "network_support": support_path}),
-    )
-    monkeypatch.setattr(pipelines, "_eligible_rows", lambda *_args, **_kwargs: pd.DataFrame({"patient_id": ["sub-01"]}))
-
-    outputs = pipelines.run_exploratory_coupling_stage(
-        cfg,
-        analysis="lagged-gfp-global-coupling",
-        max_lag_ms=8,
-        lag_step_ms=4,
-        global_surrogates=8,
-        min_subjects=1,
-    )
-
-    subject_df = read_dataframe(outputs["subject_effects"])
-    assert sorted(subject_df["lag_ms"].tolist()) == [-8, -4, 0, 4, 8]
-
-
 def test_run_exploratory_peak_gfp_global_coupling_stage_writes_symmetric_offsets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = AnalysisConfig(artifact_root=tmp_path / "artifacts", seeg_parcellation_name="yeo17")
     labels_path = tmp_path / "labels.parquet"

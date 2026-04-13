@@ -9,7 +9,7 @@ from seeg_eegmicrostates.config import AnalysisConfig
 import seeg_eegmicrostates.cli as cli
 
 
-def test_cli_exposes_streamlined_staged_commands() -> None:
+def test_cli_exposes_paper_focused_commands() -> None:
     parser = build_parser()
     action = next(action for action in parser._actions if getattr(action, "choices", None))
     commands = set(action.choices)
@@ -17,25 +17,29 @@ def test_cli_exposes_streamlined_staged_commands() -> None:
         "build-index",
         "run-eeg-states",
         "run-seeg-regions",
-        "run-activity-effects",
-        "run-connectivity-effects",
         "run-exploratory-coupling",
         "export-paper-tables",
     }
 
 
-def test_cli_hides_legacy_public_commands() -> None:
+def test_cli_hides_removed_public_commands() -> None:
     parser = build_parser()
-    legacy_commands = ["run-eeg", "run-seeg-hfa", "run-hfa-coupling", "run-band-1-40", "run-band-1-40-connectivity", "run-seeg-networks"]
-    for command in legacy_commands:
-        try:
+    removed_commands = [
+        "run-activity-effects",
+        "run-connectivity-effects",
+        "run-eeg",
+        "run-seeg-hfa",
+        "run-hfa-coupling",
+        "run-band-1-40",
+        "run-band-1-40-connectivity",
+        "run-seeg-networks",
+    ]
+    for command in removed_commands:
+        with pytest.raises(SystemExit):
             parser.parse_args([command])
-        except SystemExit:
-            continue
-        raise AssertionError(f"Legacy command {command} should not remain in the public CLI.")
 
 
-def test_cli_describes_aal3_region_outputs() -> None:
+def test_cli_describes_retained_outputs() -> None:
     parser = build_parser()
     top_level_help = parser.format_help()
     action = next(action for action in parser._actions if getattr(action, "choices", None))
@@ -56,18 +60,17 @@ def test_cli_describes_aal3_region_outputs() -> None:
     assert "archetype-conditioned-eeg-topography" in exploratory_help
     assert "fine-lag-field-state-coupling" in exploratory_help
     assert "gfp-global-coupling" in exploratory_help
-    assert "lagged-gfp-global-coupling" in exploratory_help
     assert "peak-gfp-global-coupling" in exploratory_help
     assert "gfp-controlled-microstate" in exploratory_help
     assert "gfp-controlled-transition" in exploratory_help
     assert "field-state-to-eeg-switching" in exploratory_help
     assert "gfp-controlled-field-state-to-eeg-switching" in exploratory_help
     assert "categorized manuscript tables" in export_help
-    assert "direct-state-coupling" not in exploratory_help
-    assert "event-connectivity" not in exploratory_help
-    assert "--event-window-sec" not in exploratory_help
+    assert "run-activity-effects" not in top_level_help
+    assert "run-connectivity-effects" not in top_level_help
+    assert "lagged-gfp-global-coupling" not in exploratory_help
+    assert "--method" not in exploratory_help
     assert "--direct-backend" not in exploratory_help
-    assert "state-alignment" not in top_level_help
 
 
 def test_cli_accepts_analysis_state_override() -> None:
@@ -130,10 +133,10 @@ def test_run_exploratory_coupling_accepts_analysis_specific_options() -> None:
     assert args.min_subjects == 5
 
 
-def test_run_exploratory_coupling_rejects_retired_public_options() -> None:
+def test_run_exploratory_coupling_rejects_removed_options() -> None:
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["run-exploratory-coupling", "--analysis", "lagged-state-coupling"])
+        parser.parse_args(["run-exploratory-coupling", "--analysis", "lagged-gfp-global-coupling"])
     with pytest.raises(SystemExit):
         parser.parse_args(["run-exploratory-coupling", "--analysis", "field-state-coupling", "--direct-backend", "pca-kmeans"])
 
@@ -219,7 +222,7 @@ def test_run_exploratory_coupling_accepts_archetype_conditioned_topography_analy
     assert args.field_surrogates == 48
 
 
-def test_run_exploratory_coupling_accepts_gfp_global_options() -> None:
+def test_run_exploratory_coupling_accepts_peak_gfp_global_options() -> None:
     parser = build_parser()
     args = parser.parse_args(
         [

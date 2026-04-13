@@ -1,19 +1,18 @@
 ## MODIFIED Requirements
 
-### Requirement: The public CLI SHALL expose a focused staged `1-40 Hz` workflow
-The system SHALL expose a public command surface centered on the focused staged `1-40 Hz` analysis workflow, SHALL keep `IDE_A` as the default analysis state while allowing `IDE_S` as an optional override, SHALL expose the public SEEG staging step as `run-seeg-regions`, and SHALL limit the maintained exploratory command surface to the paper-focused SEEG field-state pipeline plus explicitly supplementary GFP-informed global and SEEG-led switching follow-ups, with paper-facing export represented as a table-first handoff rather than Python figure rendering.
+### Requirement: The public CLI SHALL expose only the paper-focused analysis core
+The system SHALL expose a public command surface centered only on the paper-focused analysis core described by the retained manuscript workflow, SHALL keep `IDE_A` as the default analysis state while allowing `IDE_S` as an optional override, SHALL retain public commands only for index preparation, EEG state generation, SEEG region data staging, paper-focused exploratory coupling, and result-table export, and SHALL remove region activity/connectivity effect stages from the maintained public CLI.
 
 #### Scenario: User inspects the available public commands
 - **WHEN** a user requests CLI help
-- **THEN** the command surface SHALL expose the focused staged workflow for index preparation, EEG state generation, SEEG region generation, exploratory coupling, and paper-table export
+- **THEN** the command surface SHALL expose `build-index`, `run-eeg-states`, `run-seeg-regions`, `run-exploratory-coupling`, and `export-paper-tables`
 - **AND** the shared staged commands SHALL expose `--analysis-state` with `IDE_A` as the default and `IDE_S` as a supported option
-- **AND** the public SEEG staging command SHALL be named `run-seeg-regions`
-- **AND** the exploratory coupling entry point SHALL expose the maintained field-state analyses needed for the paper workflow, including field-state derivation, group archetypes, archetype-conditioned EEG topography, and native `4 ms` fine-lag synchrony, together with explicitly supplementary GFP/global and SEEG-led switching follow-ups
+- **AND** the public CLI SHALL NOT expose `run-activity-effects` or `run-connectivity-effects`
 
-#### Scenario: Retired region-signal exploratory methods are no longer part of the maintained public surface
-- **WHEN** the streamlined paper-focused CLI is released
-- **THEN** region-signal event, windowed, and transition exploratory analyses SHALL not appear in the maintained public exploratory help surface
-- **AND** their historical implementation, if still present internally, SHALL not define the maintained paper workflow
+#### Scenario: User requests paper-focused exploratory help
+- **WHEN** a user requests help for `run-exploratory-coupling`
+- **THEN** the command surface SHALL expose only the retained paper-focused field-state, archetype, fine-lag synchrony, GFP/global, GFP-controlled, and SEEG-to-EEG switching analyses
+- **AND** the command surface SHALL NOT expose retired region-signal, direct-state, or other non-paper exploratory analyses
 
 ### Requirement: Reports SHALL be exported from staged analysis results
 The system SHALL export paper-facing categorized tables and manifest metadata from the staged workflow into report directories without requiring users to manually transform cached results, SHALL stop treating Python as the maintained manuscript figure renderer, and SHALL export only the paper-table bundles whose required staged artifacts are available for the selected analysis state.

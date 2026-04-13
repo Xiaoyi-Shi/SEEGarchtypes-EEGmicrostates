@@ -89,13 +89,11 @@ save_panel(p, file.path(figure_dir, "supplementary_figure_06_archetype_to_eeg_sw
 
 ```{r gfp-curves}
 gfp_df <- read_bundle_table(manifest, "gfp_global_coupling", bundle = "supplementary")
-lagged_gfp_df <- read_bundle_table(manifest, "lagged_gfp_global_coupling", bundle = "supplementary")
 peak_gfp_df <- read_bundle_table(manifest, "peak_gfp_global_coupling", bundle = "supplementary")
 p1 <- plot_lag_curve(gfp_df, "Supplementary Figure 7A. GFP-global coupling")
-p2 <- plot_lag_curve(lagged_gfp_df, "Supplementary Figure 7B. Lagged GFP-global coupling")
-p3 <- plot_lag_curve(peak_gfp_df, "Supplementary Figure 7C. Peak-centered GFP-global coupling", x_col = "offset_ms")
-combined <- (p1 / p2 / p3) + plot_layout(guides = "collect")
-save_panel(combined, file.path(figure_dir, "supplementary_figure_07_gfp_global_panels.png"), width = 8, height = 12)
+p2 <- plot_lag_curve(peak_gfp_df, "Supplementary Figure 7B. Peak-centered GFP-global coupling", x_col = "offset_ms")
+combined <- (p1 / p2) + plot_layout(guides = "collect")
+save_panel(combined, file.path(figure_dir, "supplementary_figure_07_gfp_global_panels.png"), width = 8, height = 8.5)
 ```
 
 ```{r gfp-controlled}
