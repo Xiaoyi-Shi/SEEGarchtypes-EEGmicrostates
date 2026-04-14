@@ -6,11 +6,8 @@ import pandas as pd
 
 from seeg_eegmicrostates._utils import write_dataframe
 from seeg_eegmicrostates.config import AnalysisConfig, YEO7_PARCELLATION_COLUMN, YEO17_PARCELLATION_COLUMN
-from seeg_eegmicrostates.workflows.pipelines import (
-    _exploratory_branch,
-    export_paper_tables,
-    run_exploratory_coupling_stage,
-)
+from seeg_eegmicrostates.workflows import export_paper_tables, run_exploratory_coupling_stage
+from seeg_eegmicrostates.workflows.shared import _exploratory_branch
 
 
 def test_branch_specific_cache_paths(tmp_path: Path) -> None:
