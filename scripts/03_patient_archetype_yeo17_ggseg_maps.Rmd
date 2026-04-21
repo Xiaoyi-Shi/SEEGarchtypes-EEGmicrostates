@@ -1,0 +1,283 @@
+---
+title: "Patient Archetype Yeo17 Brain Maps"
+output: html_document
+params:
+  input_csv: "artifacts/manual/patient_archetype_tables/patient_archetype_yeo17_summary_97411c0ec4.csv"
+  output_dir: "artifacts/manual/archetype_brain_maps"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    stop("A non-empty path parameter is required.")
+  }
+  is_absolute <- grepl("^[A-Za-z]:[/\\\\]|^/", path)
+  candidates <- if (is_absolute) c(path) else c(path, file.path("..", path))
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve path:", path))
+  }
+  candidate <- candidates[[length(candidates)]]
+  normalizePath(candidate, winslash = "/", mustWork = FALSE)
+}
+
+assert_package_version <- function(pkg, minimum_version, install_hint) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(paste0("Missing required package '", pkg, "'. Install it with: ", install_hint))
+  }
+  if (utils::packageVersion(pkg) < minimum_version) {
+    stop(
+      paste0(
+        "Package '", pkg, "' must be >= ", minimum_version,
+        ". Upgrade it with: ", install_hint
+      )
+    )
+  }
+}
+
+assert_package_version("ggseg", "2.0.0", "install.packages('ggseg', repos = 'https://cloud.r-project.org')")
+assert_package_version(
+  "ggsegYeo2011",
+  "2.0.0",
+  "remotes::install_github('ggseg/ggsegYeo2011', upgrade = 'never')"
+)
+if (!requireNamespace("svglite", quietly = TRUE)) {
+  stop("Missing required package 'svglite'. Install it with: install.packages('svglite')")
+}
+
+library(ggseg)
+library(ggsegYeo2011)
+library(readr)
+
+safe_write_csv <- function(df, path) {
+  tryCatch(
+    {
+      readr::write_csv(df, path)
+      path
+    },
+    error = function(err) {
+      if (file.exists(path)) {
+        message("Skipping CSV overwrite for locked file: ", path)
+        return(path)
+      }
+      stop(err)
+    }
+  )
+}
+
+input_csv <- resolve_repo_path(params$input_csv, must_exist = TRUE)
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+output_stem <- tools::file_path_sans_ext(basename(input_csv))
+
+yeo17_network_order <- c(
+  "VisCent",
+  "VisPeri",
+  "SomMotA",
+  "SomMotB",
+  "DorsAttnA",
+  "DorsAttnB",
+  "SalVentAttnA",
+  "SalVentAttnB",
+  "LimbicA",
+  "LimbicB",
+  "ContA",
+  "ContB",
+  "ContC",
+  "DefaultA",
+  "DefaultB",
+  "DefaultC",
+  "TempPar"
+)
+
+# Project-internal Yeo17 shorthand follows the standard 17-network order
+# used in the exported Schaefer/Yeo17 labels, which maps directly to
+# ggsegYeo2011 regions 17Networks_1..17.
+yeo17_region_mapping <- tibble(
+  network = yeo17_network_order,
+  region = paste0("17Networks_", seq_along(yeo17_network_order))
+)
+
+raw_df <- readr::read_csv(input_csv, show_col_types = FALSE)
+missing_cols <- setdiff(c("patient_id", "archetype", yeo17_network_order), names(raw_df))
+if (length(missing_cols) > 0) {
+  stop(paste("Input CSV is missing required columns:", paste(missing_cols, collapse = ", ")))
+}
+
+n_patients_total <- dplyr::n_distinct(raw_df$patient_id)
+
+summary_long <- raw_df %>%
+  dplyr::select(patient_id, archetype, dplyr::all_of(yeo17_network_order)) %>%
+  tidyr::pivot_longer(
+    cols = dplyr::all_of(yeo17_network_order),
+    names_to = "network",
+    values_to = "loading"
+  ) %>%
+  dplyr::group_by(archetype, network) %>%
+  dplyr::summarise(
+    mean_loading = if (all(is.na(loading))) NA_real_ else mean(loading, na.rm = TRUE),
+    support_n = sum(!is.na(loading)),
+    support_fraction = support_n / n_patients_total,
+    n_patients = n_patients_total,
+    .groups = "drop"
+  ) %>%
+  dplyr::left_join(yeo17_region_mapping, by = "network") %>%
+  dplyr::mutate(
+    network = factor(network, levels = yeo17_network_order),
+    archetype = factor(archetype, levels = sort(unique(archetype))),
+    archetype_label = paste("Archetype", archetype)
+  )
+
+summary_wide <- summary_long %>%
+  dplyr::select(archetype, network, mean_loading) %>%
+  tidyr::pivot_wider(names_from = network, values_from = mean_loading) %>%
+  dplyr::select(archetype, dplyr::all_of(yeo17_network_order)) %>%
+  dplyr::arrange(archetype)
+
+support_wide <- summary_long %>%
+  dplyr::select(archetype, network, support_n) %>%
+  tidyr::pivot_wider(names_from = network, values_from = support_n) %>%
+  dplyr::select(archetype, dplyr::all_of(yeo17_network_order)) %>%
+  dplyr::arrange(archetype)
+
+safe_write_csv(
+  yeo17_region_mapping,
+  file.path(output_dir, paste0(output_stem, "_ggseg_network_mapping.csv"))
+)
+safe_write_csv(
+  summary_wide,
+  file.path(output_dir, paste0(output_stem, "_ggseg_means.csv"))
+)
+safe_write_csv(
+  summary_long,
+  file.path(output_dir, paste0(output_stem, "_ggseg_summary_long.csv"))
+)
+safe_write_csv(
+  support_wide,
+  file.path(output_dir, paste0(output_stem, "_ggseg_support.csv"))
+)
+
+scale_limit <- max(abs(summary_long$mean_loading), na.rm = TRUE)
+if (!is.finite(scale_limit) || scale_limit <= 0) {
+  scale_limit <- 1
+}
+
+brain_theme <- function() {
+  theme_void(base_size = 11) +
+    theme(
+      plot.title = element_text(face = "bold", size = 13),
+      plot.subtitle = element_text(size = 10),
+      strip.text = element_text(face = "bold", size = 11),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold")
+    )
+}
+
+build_brain_plot <- function(df, title = NULL, subtitle = NULL, show_legend = TRUE) {
+  ggplot(df) +
+    geom_brain(
+      atlas = ggsegYeo2011::yeo17(),
+      position = position_brain(hemi ~ view),
+      aes(fill = mean_loading),
+      colour = "grey35",
+      size = 0.08
+    ) +
+    scale_fill_gradient2(
+      low = "#2166ac",
+      mid = "white",
+      high = "#b2182b",
+      midpoint = 0,
+      limits = c(-scale_limit, scale_limit),
+      oob = scales::squish,
+      name = "Mean loading"
+    ) +
+    labs(title = title, subtitle = subtitle) +
+    brain_theme() +
+    theme(legend.position = if (show_legend) "bottom" else "none")
+}
+
+panel_plot <- build_brain_plot(
+  summary_long,
+  title = "Group SEEG field-state archetype maps in Yeo17 space",
+  subtitle = paste0(basename(input_csv), " | n = ", n_patients_total, " patients")
+) +
+  facet_wrap(~archetype_label, ncol = 2)
+
+panel_path <- file.path(output_dir, paste0(output_stem, "_ggseg_panel.svg"))
+save_panel(panel_plot, panel_path, width = 13, height = 10, dpi = 320)
+
+single_plot_paths <- vapply(
+  levels(summary_long$archetype),
+  FUN.VALUE = character(1),
+  FUN = function(archetype_id) {
+    single_df <- dplyr::filter(summary_long, archetype == archetype_id)
+    single_plot <- build_brain_plot(
+      single_df,
+      title = paste("Yeo17 mean loading map:", unique(single_df$archetype_label)),
+      subtitle = paste0("Shared scale: +/-", format(round(scale_limit, 3), nsmall = 3))
+    )
+    output_path <- file.path(output_dir, paste0(output_stem, "_ggseg_archetype_", archetype_id, ".svg"))
+    save_panel(single_plot, output_path, width = 11, height = 6.5, dpi = 320)
+  }
+)
+```
+
+## Inputs
+
+```{r input-summary}
+knitr::kable(
+  data.frame(
+    item = c("input_csv", "output_dir", "n_patients"),
+    value = c(input_csv, output_dir, n_patients_total)
+  ),
+  col.names = c("Item", "Value")
+)
+```
+
+## Yeo17 Mapping
+
+```{r mapping-table}
+knitr::kable(yeo17_region_mapping, col.names = c("Project network", "ggseg region"))
+```
+
+## Mean Loadings
+
+```{r mean-loadings-table}
+knitr::kable(summary_wide)
+```
+
+## Brain Maps
+
+```{r brain-maps, fig.width=13, fig.height=10}
+panel_plot
+```
+
+## Outputs
+
+```{r outputs-table}
+output_manifest <- tibble(
+  artifact = c(
+    basename(panel_path),
+    basename(single_plot_paths),
+    paste0(output_stem, "_ggseg_network_mapping.csv"),
+    paste0(output_stem, "_ggseg_means.csv"),
+    paste0(output_stem, "_ggseg_summary_long.csv"),
+    paste0(output_stem, "_ggseg_support.csv")
+  ),
+  path = c(
+    panel_path,
+    unname(single_plot_paths),
+    file.path(output_dir, paste0(output_stem, "_ggseg_network_mapping.csv")),
+    file.path(output_dir, paste0(output_stem, "_ggseg_means.csv")),
+    file.path(output_dir, paste0(output_stem, "_ggseg_summary_long.csv")),
+    file.path(output_dir, paste0(output_stem, "_ggseg_support.csv"))
+  )
+)
+knitr::kable(output_manifest)
+```

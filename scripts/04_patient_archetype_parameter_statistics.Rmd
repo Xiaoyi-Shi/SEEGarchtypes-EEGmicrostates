@@ -1,0 +1,467 @@
+---
+title: "Patient Archetype Parameter Statistics"
+output: html_document
+params:
+  input_csv: "artifacts/manual/patient_archetype_tables/patient_archetype_yeo17_summary_97411c0ec4.csv"
+  output_dir: "artifacts/manual/patient_archetype_statistics"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    stop("A non-empty path parameter is required.")
+  }
+  is_absolute <- grepl("^[A-Za-z]:[/\\\\]|^/", path)
+  candidates <- if (is_absolute) c(path) else c(path, file.path("..", path))
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve path:", path))
+  }
+  candidate <- candidates[[length(candidates)]]
+  normalizePath(candidate, winslash = "/", mustWork = FALSE)
+}
+
+for (pkg in c("svglite", "ggdist", "ggtext", "paletteer", "patchwork", "ggrepel")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(paste0("Missing required package '", pkg, "'. Install it with: install.packages('", pkg, "')"))
+  }
+}
+
+library(ggdist)
+library(ggtext)
+library(paletteer)
+library(patchwork)
+library(ggrepel)
+
+set.seed(97411)
+
+input_csv <- resolve_repo_path(params$input_csv, must_exist = TRUE)
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+output_stem <- tools::file_path_sans_ext(basename(input_csv))
+
+required_cols <- c(
+  "patient_id",
+  "archetype",
+  "occupancy",
+  "mean_dwell_ms",
+  "assignment_similarity",
+  "n_peak_maps",
+  "covered_yeo17_networks",
+  "mapped_yeo17_bipolar_channels"
+)
+
+raw_df <- read.csv(input_csv, stringsAsFactors = FALSE)
+missing_cols <- setdiff(required_cols, names(raw_df))
+if (length(missing_cols) > 0) {
+  stop(paste("Input CSV is missing required columns:", paste(missing_cols, collapse = ", ")))
+}
+
+raw_df <- raw_df %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    archetype = factor(archetype, levels = sort(unique(archetype))),
+    archetype_label = factor(paste("Archetype", archetype), levels = paste("Archetype", levels(archetype))),
+    occupancy_pct = occupancy * 100
+  )
+
+metric_specs <- tibble(
+  metric = c(
+    "occupancy_pct",
+    "mean_dwell_ms",
+    "assignment_similarity",
+    "n_peak_maps",
+    "covered_yeo17_networks",
+    "mapped_yeo17_bipolar_channels"
+  ),
+  metric_label = c(
+    "Occupancy (%)",
+    "Mean dwell time (ms)",
+    "Assignment similarity",
+    "Peak maps (n)",
+    "Covered Yeo17 networks",
+    "Mapped bipolar channels"
+  ),
+  metric_group = c("core", "core", "support", "support", "coverage", "coverage")
+)
+
+long_df <- raw_df %>%
+  select(patient_id, archetype, archetype_label, all_of(metric_specs$metric)) %>%
+  pivot_longer(
+    cols = all_of(metric_specs$metric),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  left_join(metric_specs, by = "metric") %>%
+  mutate(
+    metric_label = factor(metric_label, levels = metric_specs$metric_label),
+    metric_group = factor(metric_group, levels = c("core", "support", "coverage"))
+  )
+
+summary_stats <- long_df %>%
+  group_by(metric_group, metric, metric_label, archetype, archetype_label) %>%
+  summarise(
+    n = sum(!is.na(value)),
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    q1 = quantile(value, probs = 0.25, na.rm = TRUE),
+    q3 = quantile(value, probs = 0.75, na.rm = TRUE),
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+summary_table_wide <- summary_stats %>%
+  select(metric_label, archetype_label, mean, sd, median, q1, q3, min, max) %>%
+  mutate(across(c(mean, sd, median, q1, q3, min, max), ~round(.x, 3))) %>%
+  arrange(metric_label, archetype_label)
+
+archetype_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))[c(1, 2, 3, 4)]
+names(archetype_palette) <- levels(raw_df$archetype_label)
+
+bg_fill <- "#FBF7F1"
+panel_fill <- "#FFFDF8"
+grid_color <- "#E4DCCF"
+ink_color <- "#1F2A33"
+muted_color <- "#5B6670"
+
+parameter_theme <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      strip.background = element_rect(fill = "#EFE6D8", color = NA),
+      strip.text = ggtext::element_markdown(face = "bold", color = ink_color, lineheight = 1.05),
+      plot.title = ggtext::element_markdown(face = "bold", size = rel(1.25), color = ink_color),
+      plot.subtitle = ggtext::element_markdown(size = rel(0.95), color = muted_color),
+      axis.title = element_text(face = "bold", color = ink_color),
+      axis.text = element_text(color = ink_color),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = grid_color, linewidth = 0.34),
+      plot.title.position = "plot",
+      plot.margin = margin(10, 14, 10, 10),
+      panel.spacing = grid::unit(0.9, "lines"),
+      legend.position = "bottom",
+      legend.title = element_blank()
+    )
+}
+
+bootstrap_mean_ci <- function(values, n_boot = 5000, conf = 0.95) {
+  values <- values[is.finite(values)]
+  alpha <- (1 - conf) / 2
+  if (length(values) < 2) {
+    return(tibble(mean_diff = mean(values), ci_low = NA_real_, ci_high = NA_real_, n = length(values)))
+  }
+  reps <- replicate(n_boot, mean(sample(values, size = length(values), replace = TRUE)))
+  tibble(
+    mean_diff = mean(values),
+    ci_low = unname(quantile(reps, probs = alpha, na.rm = TRUE)),
+    ci_high = unname(quantile(reps, probs = 1 - alpha, na.rm = TRUE)),
+    n = length(values)
+  )
+}
+
+# A. Occupancy is compositional: normalize within patient and show the full 100%.
+occupancy_df <- raw_df %>%
+  group_by(patient_id) %>%
+  mutate(
+    occupancy_total = sum(occupancy_pct, na.rm = TRUE),
+    occupancy_composition = occupancy_pct / occupancy_total * 100
+  ) %>%
+  ungroup()
+
+patient_order <- occupancy_df %>%
+  group_by(patient_id) %>%
+  summarise(
+    dominant_archetype = archetype_label[which.max(occupancy_composition)],
+    dominant_value = max(occupancy_composition, na.rm = TRUE),
+    entropy = {
+      p <- occupancy_composition / 100
+      -sum(p * log(p + 1e-12)) / log(length(p))
+    },
+    .groups = "drop"
+  ) %>%
+  arrange(dominant_archetype, desc(dominant_value), entropy)
+
+patient_alias <- patient_order %>%
+  mutate(
+    patient_alias = sprintf("sub-%02d", row_number()),
+    patient_alias = factor(patient_alias, levels = rev(patient_alias))
+  ) %>%
+  select(patient_id, patient_alias)
+
+occupancy_df <- occupancy_df %>%
+  left_join(patient_alias, by = "patient_id")
+
+occupancy_composition_plot <- ggplot(
+  occupancy_df,
+  aes(x = occupancy_composition, y = patient_alias, fill = archetype_label)
+) +
+  geom_col(width = 0.78, color = panel_fill, linewidth = 0.25) +
+  scale_fill_manual(values = archetype_palette) +
+  scale_x_continuous(labels = function(x) paste0(x, "%"), expand = expansion(mult = c(0, 0.01))) +
+  labs(
+    x = "Within-patient occupancy share",
+    y = "Anonymized patient"
+  ) +
+  parameter_theme(base_size = 10.5) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_text(size = 8)
+  )
+
+# B. Dwell time is paired: show raw paired values plus bootstrap paired contrasts.
+dwell_long <- raw_df %>%
+  select(patient_id, archetype_label, mean_dwell_ms)
+
+dwell_wide <- dwell_long %>%
+  pivot_wider(names_from = archetype_label, values_from = mean_dwell_ms)
+
+reference_archetype <- levels(raw_df$archetype_label)[[1]]
+contrast_archetypes <- levels(raw_df$archetype_label)[-1]
+
+dwell_contrasts <- bind_rows(lapply(contrast_archetypes, function(target) {
+  diff_values <- dwell_wide[[target]] - dwell_wide[[reference_archetype]]
+  bootstrap_mean_ci(diff_values) %>%
+    mutate(
+      contrast = paste(target, "-", reference_archetype),
+      contrast = factor(contrast, levels = paste(contrast_archetypes, "-", reference_archetype))
+    )
+}))
+
+dwell_raw_plot <- ggplot(
+  dwell_long,
+  aes(x = archetype_label, y = mean_dwell_ms, group = patient_id)
+) +
+  geom_line(color = scales::alpha(muted_color, 0.22), linewidth = 0.38) +
+  geom_point(aes(fill = archetype_label), shape = 21, size = 2.15, color = "white", stroke = 0.25) +
+  ggdist::stat_pointinterval(
+    aes(group = archetype_label),
+    point_interval = ggdist::mean_qi,
+    .width = 0.95,
+    color = ink_color,
+    point_size = 2.4,
+    linewidth = 0.5,
+    position = position_nudge(x = 0.18)
+  ) +
+  scale_fill_manual(values = archetype_palette, guide = "none") +
+  labs(
+    x = "Archetype",
+    y = "Mean dwell time (ms)"
+  ) +
+  parameter_theme(base_size = 10.5) +
+  theme(panel.grid.major.x = element_blank())
+
+dwell_contrast_plot <- ggplot(dwell_contrasts, aes(x = mean_diff, y = contrast)) +
+  geom_vline(xintercept = 0, color = "#A8A096", linewidth = 0.45, linetype = "dashed") +
+  geom_linerange(aes(xmin = ci_low, xmax = ci_high, color = contrast), linewidth = 1.05) +
+  geom_point(aes(color = contrast), size = 3.1) +
+  geom_text(
+    aes(label = sprintf("%+.1f ms", mean_diff)),
+    nudge_y = 0.18,
+    size = 3.1,
+    color = ink_color
+  ) +
+  scale_color_manual(values = archetype_palette[contrast_archetypes], guide = "none") +
+  labs(
+    x = paste("Difference versus", reference_archetype, "(ms)"),
+    y = "Paired contrast"
+  ) +
+  parameter_theme(base_size = 10.5) +
+  theme(panel.grid.major.y = element_blank())
+
+dwell_estimation_plot <- dwell_raw_plot + dwell_contrast_plot +
+  patchwork::plot_layout(widths = c(1.15, 0.95))
+
+# C. Assignment similarity: rank patients within each archetype.
+similarity_rank_df <- raw_df %>%
+  group_by(archetype_label) %>%
+  arrange(assignment_similarity, .by_group = TRUE) %>%
+  mutate(
+    rank = row_number(),
+    label_extreme = rank == 1 | rank == n()
+  ) %>%
+  ungroup() %>%
+  left_join(patient_alias, by = "patient_id")
+
+similarity_mean_df <- similarity_rank_df %>%
+  group_by(archetype_label) %>%
+  summarise(mean_similarity = mean(assignment_similarity, na.rm = TRUE), .groups = "drop")
+
+assignment_similarity_ranked_plot <- ggplot(
+  similarity_rank_df,
+  aes(x = rank, y = assignment_similarity, color = archetype_label)
+) +
+  geom_line(linewidth = 0.48, alpha = 0.72) +
+  geom_point(size = 2.15, alpha = 0.95) +
+  geom_hline(
+    data = similarity_mean_df,
+    aes(yintercept = mean_similarity, color = archetype_label),
+    linewidth = 0.58,
+    linetype = "dashed",
+    show.legend = FALSE
+  ) +
+  ggrepel::geom_text_repel(
+    data = filter(similarity_rank_df, label_extreme),
+    aes(label = patient_alias),
+    size = 2.7,
+    seed = 97411,
+    box.padding = 0.22,
+    point.padding = 0.16,
+    segment.alpha = 0.35,
+    show.legend = FALSE
+  ) +
+  facet_wrap(~archetype_label, nrow = 1) +
+  scale_color_manual(values = archetype_palette, guide = "none") +
+  scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0.02, 0.06))) +
+  labs(
+    x = "Within-archetype patient rank",
+    y = "Assignment similarity"
+  ) +
+  parameter_theme(base_size = 10.5) +
+  theme(panel.grid.major.x = element_blank())
+
+# D. Patient x archetype heatmap: z-score each metric before faceting.
+heatmap_metrics <- c("occupancy_pct", "mean_dwell_ms", "assignment_similarity")
+heatmap_df <- long_df %>%
+  filter(metric %in% heatmap_metrics) %>%
+  group_by(metric) %>%
+  mutate(
+    value_z = as.numeric(scale(value)),
+    metric_label = factor(metric_label, levels = metric_specs$metric_label[metric_specs$metric %in% heatmap_metrics])
+  ) %>%
+  ungroup() %>%
+  left_join(patient_alias, by = "patient_id")
+
+patient_archetype_heatmap_plot <- ggplot(
+  heatmap_df,
+  aes(x = archetype_label, y = patient_alias, fill = value_z)
+) +
+  geom_tile(color = panel_fill, linewidth = 0.18) +
+  facet_wrap(~metric_label, nrow = 1) +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "#F7F3EA",
+    high = "#B2182B",
+    midpoint = 0,
+    name = "Metric z-score"
+  ) +
+  labs(
+    x = "Archetype",
+    y = "Anonymized patient"
+  ) +
+  parameter_theme(base_size = 10) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 35, hjust = 1, face = "bold"),
+    axis.text.y = element_text(size = 7.3),
+    legend.position = "right"
+  )
+
+main_panel_plot <- (occupancy_composition_plot | dwell_estimation_plot) /
+  (assignment_similarity_ranked_plot | patient_archetype_heatmap_plot) +
+  patchwork::plot_layout(heights = c(1, 1.05), widths = c(0.9, 1.35))
+
+summary_csv_path <- file.path(output_dir, paste0(output_stem, "_parameter_summary_stats.csv"))
+long_csv_path <- file.path(output_dir, paste0(output_stem, "_parameter_long.csv"))
+occupancy_composition_path <- file.path(output_dir, paste0(output_stem, "_occupancy_composition.svg"))
+dwell_estimation_path <- file.path(output_dir, paste0(output_stem, "_dwell_paired_estimation.svg"))
+similarity_ranked_path <- file.path(output_dir, paste0(output_stem, "_assignment_similarity_ranked.svg"))
+heatmap_path <- file.path(output_dir, paste0(output_stem, "_patient_archetype_parameter_heatmap.svg"))
+main_panel_path <- file.path(output_dir, paste0(output_stem, "_parameter_main_panel.svg"))
+
+write.csv(summary_table_wide, summary_csv_path, row.names = FALSE)
+write.csv(long_df, long_csv_path, row.names = FALSE)
+save_panel(occupancy_composition_plot, occupancy_composition_path, width = 8.5, height = 7.2, dpi = 320)
+save_panel(dwell_estimation_plot, dwell_estimation_path, width = 12, height = 6.4, dpi = 320)
+save_panel(assignment_similarity_ranked_plot, similarity_ranked_path, width = 11.5, height = 5.7, dpi = 320)
+save_panel(patient_archetype_heatmap_plot, heatmap_path, width = 11.5, height = 6.8, dpi = 320)
+save_panel(main_panel_plot, main_panel_path, width = 18, height = 13, dpi = 320)
+```
+
+## Inputs
+
+```{r input-summary}
+knitr::kable(
+  data.frame(
+    item = c("input_csv", "output_dir", "n_patients", "n_rows"),
+    value = c(
+      input_csv,
+      output_dir,
+      dplyr::n_distinct(raw_df$patient_id),
+      nrow(raw_df)
+    )
+  ),
+  col.names = c("Item", "Value")
+)
+```
+
+## Descriptive Summary
+
+```{r summary-table}
+knitr::kable(summary_table_wide)
+```
+
+## Main Panel
+
+```{r main-panel, fig.width=18, fig.height=13}
+main_panel_plot
+```
+
+## Occupancy Composition
+
+```{r occupancy-composition, fig.width=8.5, fig.height=7.2}
+occupancy_composition_plot
+```
+
+## Dwell Time Estimation
+
+```{r dwell-estimation, fig.width=12, fig.height=6.4}
+dwell_estimation_plot
+```
+
+## Ranked Assignment Similarity
+
+```{r assignment-similarity, fig.width=11.5, fig.height=5.7}
+assignment_similarity_ranked_plot
+```
+
+## Patient-Archetype Heatmap
+
+```{r parameter-heatmap, fig.width=11.5, fig.height=6.8}
+patient_archetype_heatmap_plot
+```
+
+## Outputs
+
+```{r outputs-table}
+output_manifest <- data.frame(
+  artifact = c(
+    basename(summary_csv_path),
+    basename(long_csv_path),
+    basename(occupancy_composition_path),
+    basename(dwell_estimation_path),
+    basename(similarity_ranked_path),
+    basename(heatmap_path),
+    basename(main_panel_path)
+  ),
+  path = c(
+    summary_csv_path,
+    long_csv_path,
+    occupancy_composition_path,
+    dwell_estimation_path,
+    similarity_ranked_path,
+    heatmap_path,
+    main_panel_path
+  )
+)
+knitr::kable(output_manifest)
+```
