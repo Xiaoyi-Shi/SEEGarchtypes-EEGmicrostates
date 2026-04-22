@@ -1,0 +1,557 @@
+---
+title: "SEEG Archetype and EEG Microstate Relationship"
+output: html_document
+params:
+  report_root: "artifacts/runs/20260412_140500/reports"
+  runtime_hash: "97411c0ec4"
+  output_dir: "artifacts/manual/archetype_eeg_microstate_relationship"
+  template_similarity_csv: ""
+  state_preference_csv: ""
+  fine_lag_csv: ""
+  subject_peak_csv: ""
+  switching_csv: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    stop("A non-empty path parameter is required.")
+  }
+  is_absolute <- grepl("^[A-Za-z]:[/\\\\]|^/", path)
+  candidates <- if (is_absolute) c(path) else c(path, file.path("..", path))
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve path:", path))
+  }
+  candidate <- candidates[[length(candidates)]]
+  normalizePath(candidate, winslash = "/", mustWork = FALSE)
+}
+
+for (pkg in c("svglite", "ggdist", "ggtext", "paletteer", "patchwork")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(paste0("Missing required package '", pkg, "'. Install it with: install.packages('", pkg, "')"))
+  }
+}
+
+library(ggdist)
+library(ggtext)
+library(paletteer)
+library(patchwork)
+
+report_root <- resolve_repo_path(params$report_root, must_exist = TRUE)
+runtime_hash <- params$runtime_hash
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+output_stem <- paste0("seeg_archetype_eeg_microstate_", runtime_hash)
+
+find_report_csv <- function(explicit_path, subdir, label_pattern) {
+  if (!is.null(explicit_path) && nzchar(explicit_path)) {
+    return(resolve_repo_path(explicit_path, must_exist = TRUE))
+  }
+
+  hash_fragment <- if (!is.null(runtime_hash) && nzchar(runtime_hash)) runtime_hash else ""
+  search_pattern <- file.path(
+    report_root,
+    subdir,
+    paste0("*", label_pattern, "*", hash_fragment, ".csv")
+  )
+  matches <- Sys.glob(search_pattern)
+  if (length(matches) < 1) {
+    stop(paste("No CSV matched:", search_pattern))
+  }
+  normalizePath(sort(matches)[[1]], winslash = "/", mustWork = TRUE)
+}
+
+read_validated_csv <- function(path, required_cols, label) {
+  df <- read.csv(path, stringsAsFactors = FALSE)
+  missing_cols <- setdiff(required_cols, names(df))
+  if (length(missing_cols) > 0) {
+    stop(paste(label, "is missing required columns:", paste(missing_cols, collapse = ", ")))
+  }
+  df
+}
+
+template_similarity_path <- find_report_csv(
+  params$template_similarity_csv,
+  "main_tables",
+  "archetype_eeg_template_similarity"
+)
+fine_lag_path <- find_report_csv(
+  params$fine_lag_csv,
+  "main_tables",
+  "archetype_eeg_fine_lag_synchrony"
+)
+state_preference_path <- find_report_csv(
+  params$state_preference_csv,
+  "supplementary_tables",
+  "archetype_eeg_state_preference"
+)
+subject_peak_path <- find_report_csv(
+  params$subject_peak_csv,
+  "supplementary_tables",
+  "archetype_eeg_fine_lag_subject_peaks"
+)
+switching_path <- find_report_csv(
+  params$switching_csv,
+  "supplementary_tables",
+  "archetype_to_eeg_switching"
+)
+
+template_similarity <- read_validated_csv(
+  template_similarity_path,
+  c("assigned_archetype", "microstate", "n_subjects", "mean_similarity", "median_similarity", "min_similarity"),
+  "template_similarity_csv"
+)
+state_preference <- read_validated_csv(
+  state_preference_path,
+  c("assigned_archetype", "microstate", "n_subjects", "mean_effect", "q_fdr", "mean_conditional_probability", "mean_baseline_probability"),
+  "state_preference_csv"
+)
+fine_lag <- read_validated_csv(
+  fine_lag_path,
+  c("lag_ms", "n_subjects", "mean_effect", "median_effect", "q_fdr", "mean_observed_coupling", "mean_null_mean_coupling"),
+  "fine_lag_csv"
+)
+subject_peaks_raw <- read_validated_csv(
+  subject_peak_path,
+  c("patient_id", "peak_lag_ms", "peak_effect_mean_diff", "peak_width_ms", "peak_p_perm"),
+  "subject_peak_csv"
+)
+switching <- read_validated_csv(
+  switching_path,
+  c("from_state", "to_state", "response_kind", "response_state", "n_subjects", "mean_effect", "q_fdr"),
+  "switching_csv"
+)
+
+archetype_levels <- sort(unique(c(template_similarity$assigned_archetype, state_preference$assigned_archetype)))
+microstate_levels <- sort(unique(c(template_similarity$microstate, state_preference$microstate)))
+
+format_archetype <- function(x) {
+  factor(paste("Archetype", x), levels = paste("Archetype", archetype_levels))
+}
+
+format_microstate <- function(x) {
+  factor(paste("Microstate", x), levels = paste("Microstate", microstate_levels))
+}
+
+template_similarity <- template_similarity %>%
+  mutate(
+    archetype_label = format_archetype(assigned_archetype),
+    microstate_label = format_microstate(microstate),
+    label_value = sprintf("%.3f", mean_similarity)
+  )
+
+state_preference <- state_preference %>%
+  mutate(
+    archetype_label = format_archetype(assigned_archetype),
+    microstate_label = format_microstate(microstate),
+    effect_pp = mean_effect * 100,
+    conditional_pct = mean_conditional_probability * 100,
+    baseline_pct = mean_baseline_probability * 100,
+    label_value = sprintf("%+.2f pp", effect_pp),
+    q_label = ifelse(q_fdr < 0.05, "q<0.05", "")
+  )
+
+fine_lag <- fine_lag %>%
+  arrange(lag_ms) %>%
+  mutate(
+    effect_x1000 = mean_effect * 1000,
+    observed_x1000 = mean_observed_coupling * 1000,
+    null_x1000 = mean_null_mean_coupling * 1000,
+    is_fdr_significant = q_fdr < 0.05
+  )
+
+subject_alias <- subject_peaks_raw %>%
+  distinct(patient_id) %>%
+  arrange(patient_id) %>%
+  mutate(patient_alias = sprintf("sub-%02d", row_number()))
+
+subject_peaks <- subject_peaks_raw %>%
+  left_join(subject_alias, by = "patient_id") %>%
+  mutate(
+    peak_effect_x1000 = peak_effect_mean_diff * 1000,
+    peak_p_label = ifelse(peak_p_perm < 0.05, "p<0.05", "n.s.")
+  ) %>%
+  select(-patient_id)
+
+switching_any <- switching %>%
+  filter(response_kind == "any-switch") %>%
+  mutate(
+    from_label = format_archetype(from_state),
+    to_label = format_archetype(to_state),
+    effect_pp = mean_effect * 100,
+    label_value = sprintf("%+.2f pp", effect_pp),
+    q_label = ifelse(q_fdr < 0.05, "q<0.05", "")
+  )
+
+best_template_match <- template_similarity %>%
+  group_by(archetype_label) %>%
+  slice_max(order_by = mean_similarity, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    archetype_label,
+    best_template_microstate = microstate_label,
+    mean_similarity = round(mean_similarity, 4)
+  )
+
+best_state_preference <- state_preference %>%
+  group_by(archetype_label) %>%
+  slice_max(order_by = mean_effect, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    archetype_label,
+    best_preferred_microstate = microstate_label,
+    preference_pp = round(effect_pp, 3),
+    q_fdr = round(q_fdr, 4)
+  )
+
+relationship_summary <- best_template_match %>%
+  left_join(best_state_preference, by = "archetype_label")
+
+archetype_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))[c(1, 2, 3, 4)]
+names(archetype_palette) <- paste("Archetype", archetype_levels)
+
+bg_fill <- "#FBF7F1"
+panel_fill <- "#FFFDF8"
+grid_color <- "#E4DCCF"
+ink_color <- "#1F2A33"
+muted_color <- "#5B6670"
+warm_low <- "#F4EADC"
+warm_mid <- "#D49A51"
+warm_high <- "#7B2D26"
+cool_low <- "#2166AC"
+hot_high <- "#B2182B"
+
+relationship_theme <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      strip.background = element_rect(fill = "#EFE6D8", color = NA),
+      strip.text = ggtext::element_markdown(face = "bold", color = ink_color, lineheight = 1.05),
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
+      axis.title = element_text(face = "bold", color = ink_color),
+      axis.text = element_text(color = ink_color),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = grid_color, linewidth = 0.34),
+      plot.margin = margin(10, 14, 10, 10),
+      panel.spacing = grid::unit(0.9, "lines"),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold", color = ink_color),
+      legend.text = element_text(color = ink_color),
+      plot.tag = element_text(face = "bold", size = rel(1.2), color = ink_color)
+    )
+}
+
+save_svg <- function(plot_obj, output_path, width = 8, height = 5) {
+  ggplot2::ggsave(
+    output_path,
+    plot = plot_obj,
+    width = width,
+    height = height,
+    device = svglite::svglite,
+    bg = bg_fill
+  )
+  output_path
+}
+
+# A. Categorical x categorical + continuous similarity: matrix heatmap is the native display.
+template_best_cells <- template_similarity %>%
+  group_by(archetype_label) %>%
+  slice_max(order_by = mean_similarity, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+template_similarity_plot <- ggplot(
+  template_similarity,
+  aes(x = microstate_label, y = archetype_label, fill = mean_similarity)
+) +
+  geom_tile(color = panel_fill, linewidth = 0.55) +
+  geom_point(
+    data = template_best_cells,
+    shape = 21,
+    size = 8.6,
+    stroke = 0.75,
+    color = ink_color,
+    fill = NA
+  ) +
+  geom_text(aes(label = label_value), color = ink_color, size = 3.35, fontface = "bold") +
+  scale_fill_gradientn(
+    colors = c(warm_low, warm_mid, warm_high),
+    name = "Mean template\nsimilarity"
+  ) +
+  labs(
+    x = "EEG microstate",
+    y = "SEEG archetype"
+  ) +
+  relationship_theme(base_size = 10.7) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 28, hjust = 1, face = "bold"),
+    axis.text.y = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+# B. Conditional state preference is a signed probability difference.
+state_preference_plot <- ggplot(
+  state_preference,
+  aes(x = microstate_label, y = archetype_label, fill = effect_pp)
+) +
+  geom_tile(color = panel_fill, linewidth = 0.55) +
+  geom_text(aes(label = label_value), color = ink_color, size = 3.2, fontface = "bold") +
+  geom_text(
+    aes(label = q_label),
+    nudge_y = -0.32,
+    color = muted_color,
+    size = 2.4,
+    fontface = "bold"
+  ) +
+  scale_fill_gradient2(
+    low = cool_low,
+    mid = panel_fill,
+    high = hot_high,
+    midpoint = 0,
+    name = "Preference\nchange"
+  ) +
+  labs(
+    x = "EEG microstate",
+    y = "SEEG archetype"
+  ) +
+  relationship_theme(base_size = 10.7) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 28, hjust = 1, face = "bold"),
+    axis.text.y = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+# C. Lag is continuous and signed, so a native-resolution curve is most appropriate.
+fine_lag_plot <- ggplot(fine_lag, aes(x = lag_ms, y = effect_x1000)) +
+  geom_hline(yintercept = 0, color = "#A8A096", linewidth = 0.45) +
+  geom_vline(xintercept = 0, color = "#A8A096", linewidth = 0.45, linetype = "dashed") +
+  geom_area(fill = scales::alpha(warm_mid, 0.18), color = NA) +
+  geom_line(color = warm_high, linewidth = 0.9) +
+  geom_point(aes(fill = is_fdr_significant), shape = 21, color = ink_color, size = 2.45, stroke = 0.35) +
+  scale_fill_manual(
+    values = c(`TRUE` = hot_high, `FALSE` = panel_fill),
+    labels = c(`TRUE` = "q < 0.05", `FALSE` = "n.s."),
+    name = "FDR"
+  ) +
+  scale_x_continuous(breaks = sort(unique(fine_lag$lag_ms))) +
+  labs(
+    x = "Lag from SEEG archetype to EEG microstate (ms)",
+    y = "Coupling effect vs permuted baseline (x10^-3)"
+  ) +
+  relationship_theme(base_size = 10.7) +
+  theme(
+    panel.grid.major.x = element_line(color = grid_color, linewidth = 0.25),
+    legend.position = "bottom"
+  )
+
+# D. Subject peaks are continuous lag/effect pairs; the scatter keeps both dimensions visible.
+subject_peak_plot <- ggplot(
+  subject_peaks,
+  aes(x = peak_lag_ms, y = peak_effect_x1000)
+) +
+  geom_hline(yintercept = 0, color = "#A8A096", linewidth = 0.45) +
+  geom_vline(xintercept = 0, color = "#A8A096", linewidth = 0.45, linetype = "dashed") +
+  stat_ellipse(color = scales::alpha(ink_color, 0.38), linewidth = 0.45, linetype = "longdash") +
+  geom_point(aes(fill = peak_width_ms), shape = 21, color = "white", size = 3.25, stroke = 0.35, alpha = 0.96) +
+  scale_fill_gradientn(
+    colors = c(warm_low, warm_mid, warm_high),
+    name = "Peak width\n(ms)"
+  ) +
+  labs(
+    x = "Subject peak lag (ms)",
+    y = "Subject peak coupling effect (x10^-3)"
+  ) +
+  relationship_theme(base_size = 10.7) +
+  theme(legend.position = "right")
+
+# E. Switching is transition-level categorical data; use a source-by-target transition heatmap.
+switching_plot <- ggplot(
+  switching_any,
+  aes(x = to_label, y = from_label, fill = effect_pp)
+) +
+  geom_tile(color = panel_fill, linewidth = 0.55) +
+  geom_text(aes(label = label_value), color = ink_color, size = 3.05, fontface = "bold") +
+  geom_text(
+    aes(label = q_label),
+    nudge_y = -0.32,
+    color = muted_color,
+    size = 2.35,
+    fontface = "bold"
+  ) +
+  scale_fill_gradient2(
+    low = cool_low,
+    mid = panel_fill,
+    high = hot_high,
+    midpoint = 0,
+    name = "EEG switching\neffect"
+  ) +
+  labs(
+    x = "Target SEEG archetype",
+    y = "Source SEEG archetype"
+  ) +
+  relationship_theme(base_size = 10.7) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 28, hjust = 1, face = "bold"),
+    axis.text.y = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+main_panel_plot <- (template_similarity_plot | state_preference_plot) /
+  (fine_lag_plot | subject_peak_plot) /
+  switching_plot +
+  patchwork::plot_layout(heights = c(1, 1.05, 1), guides = "collect") +
+  patchwork::plot_annotation(tag_levels = "A") &
+  relationship_theme(base_size = 10.7) &
+  theme(
+    legend.position = "right",
+    plot.tag = element_text(face = "bold", size = 13, color = ink_color)
+  )
+
+summary_csv_path <- file.path(output_dir, paste0(output_stem, "_relationship_summary.csv"))
+template_csv_path <- file.path(output_dir, paste0(output_stem, "_template_similarity_matrix.csv"))
+preference_csv_path <- file.path(output_dir, paste0(output_stem, "_state_preference_matrix.csv"))
+fine_lag_csv_path <- file.path(output_dir, paste0(output_stem, "_fine_lag_curve.csv"))
+subject_peak_csv_path <- file.path(output_dir, paste0(output_stem, "_subject_peak_summary_anonymized.csv"))
+switching_csv_path <- file.path(output_dir, paste0(output_stem, "_archetype_to_eeg_switching_any.csv"))
+
+main_panel_path <- file.path(output_dir, paste0(output_stem, "_relationship_main_panel.svg"))
+template_similarity_plot_path <- file.path(output_dir, paste0(output_stem, "_template_similarity_heatmap.svg"))
+state_preference_plot_path <- file.path(output_dir, paste0(output_stem, "_state_preference_heatmap.svg"))
+fine_lag_plot_path <- file.path(output_dir, paste0(output_stem, "_fine_lag_coupling_curve.svg"))
+subject_peak_plot_path <- file.path(output_dir, paste0(output_stem, "_subject_peak_lag_effect.svg"))
+switching_plot_path <- file.path(output_dir, paste0(output_stem, "_archetype_to_eeg_switching_heatmap.svg"))
+
+write.csv(relationship_summary, summary_csv_path, row.names = FALSE)
+write.csv(template_similarity, template_csv_path, row.names = FALSE)
+write.csv(state_preference, preference_csv_path, row.names = FALSE)
+write.csv(fine_lag, fine_lag_csv_path, row.names = FALSE)
+write.csv(subject_peaks, subject_peak_csv_path, row.names = FALSE)
+write.csv(switching_any, switching_csv_path, row.names = FALSE)
+
+save_svg(template_similarity_plot, template_similarity_plot_path, width = 7.8, height = 5.8)
+save_svg(state_preference_plot, state_preference_plot_path, width = 7.8, height = 5.8)
+save_svg(fine_lag_plot, fine_lag_plot_path, width = 9.2, height = 5.7)
+save_svg(subject_peak_plot, subject_peak_plot_path, width = 7.8, height = 5.7)
+save_svg(switching_plot, switching_plot_path, width = 7.8, height = 5.9)
+save_svg(main_panel_plot, main_panel_path, width = 16.8, height = 15.2)
+```
+
+## Inputs
+
+```{r input-summary}
+knitr::kable(
+  data.frame(
+    item = c(
+      "report_root",
+      "runtime_hash",
+      "template_similarity_csv",
+      "state_preference_csv",
+      "fine_lag_csv",
+      "subject_peak_csv",
+      "switching_csv",
+      "output_dir"
+    ),
+    value = c(
+      report_root,
+      runtime_hash,
+      template_similarity_path,
+      state_preference_path,
+      fine_lag_path,
+      subject_peak_path,
+      switching_path,
+      output_dir
+    )
+  ),
+  col.names = c("Item", "Value")
+)
+```
+
+## Relationship Summary
+
+```{r summary-table}
+knitr::kable(relationship_summary)
+```
+
+## Main Panel
+
+```{r main-panel, fig.width=16.8, fig.height=15.2}
+main_panel_plot
+```
+
+## Template Similarity
+
+```{r template-similarity, fig.width=7.8, fig.height=5.8}
+template_similarity_plot
+```
+
+## State Preference
+
+```{r state-preference, fig.width=7.8, fig.height=5.8}
+state_preference_plot
+```
+
+## Fine-Lag Coupling
+
+```{r fine-lag, fig.width=9.2, fig.height=5.7}
+fine_lag_plot
+```
+
+## Subject Peak Lag and Effect
+
+```{r subject-peaks, fig.width=7.8, fig.height=5.7}
+subject_peak_plot
+```
+
+## Archetype-to-EEG Switching
+
+```{r switching, fig.width=7.8, fig.height=5.9}
+switching_plot
+```
+
+## Outputs
+
+```{r outputs-table}
+output_manifest <- data.frame(
+  artifact = c(
+    basename(summary_csv_path),
+    basename(template_csv_path),
+    basename(preference_csv_path),
+    basename(fine_lag_csv_path),
+    basename(subject_peak_csv_path),
+    basename(switching_csv_path),
+    basename(main_panel_path),
+    basename(template_similarity_plot_path),
+    basename(state_preference_plot_path),
+    basename(fine_lag_plot_path),
+    basename(subject_peak_plot_path),
+    basename(switching_plot_path)
+  ),
+  path = c(
+    summary_csv_path,
+    template_csv_path,
+    preference_csv_path,
+    fine_lag_csv_path,
+    subject_peak_csv_path,
+    switching_csv_path,
+    main_panel_path,
+    template_similarity_plot_path,
+    state_preference_plot_path,
+    fine_lag_plot_path,
+    subject_peak_plot_path,
+    switching_plot_path
+  )
+)
+knitr::kable(output_manifest)
+```

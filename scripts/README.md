@@ -142,8 +142,64 @@ The document writes:
 - one paired dwell-time estimation `SVG` with bootstrap confidence intervals versus `Archetype 0`
 - one ranked assignment-similarity `SVG`
 - one patient-by-archetype parameter heatmap `SVG`
+- one `archetype x Yeo17 network` signed loading heatmap `SVG`
+- one `archetype x Yeo17 network` loading-summary `CSV`
 
 The current styling path depends on `ggdist`, `ggtext`, `paletteer`, `patchwork`, `ggrepel`, and `svglite`.
+
+## SEEG Archetype and EEG Microstate Relationship R Markdown
+
+Use `scripts/05_seeg_archetype_eeg_microstate_relationship.Rmd` when you want relationship plots between group SEEG archetypes and EEG microstates using the exported archetype-conditioned EEG tables.
+
+Example:
+
+```powershell
+Rscript -e "rmarkdown::render('scripts/05_seeg_archetype_eeg_microstate_relationship.Rmd', params=list(report_root='artifacts/runs/20260412_140500/reports', runtime_hash='97411c0ec4', output_dir='artifacts/manual/archetype_eeg_microstate_relationship'))"
+```
+
+The document writes:
+
+- one combined relationship-panel `SVG`
+- one `SEEG archetype x EEG microstate` template-similarity heatmap `SVG`
+- one `SEEG archetype x EEG microstate` state-preference heatmap `SVG`
+- one fine-lag coupling curve `SVG`
+- one subject-level peak-lag/effect `SVG` with anonymized subject table output
+- one archetype-transition to EEG-switching heatmap `SVG`
+- cleaned summary `CSV` files used by the plots
+
+The current styling path matches the archetype parameter statistics document and depends on `ggdist`, `ggtext`, `paletteer`, `patchwork`, and `svglite`.
+
+## EEG Microstate Overview Export and R Markdown
+
+Use `scripts/export_eeg_microstate_overview.py` when you want to export standalone EEG microstate clustering topographies and subject-level EEG microstate parameters from cached EEG labels.
+
+Example:
+
+```powershell
+uv run python scripts/export_eeg_microstate_overview.py --runtime-hash 97411c0ec4 --output-dir artifacts/manual/eeg_microstate_overview
+```
+
+The script writes:
+
+- one Python-rendered cluster-topography `SVG` panel and one `PNG` companion
+- one `SVG` per EEG microstate topography
+- template values and interpolated topomap grid `CSV` files for R rendering
+- anonymized subject-level parameter `CSV`
+- long-format parameter `CSV`
+- group-level parameter summary `CSV`
+- group transition-matrix `CSV`
+- one representative 19-channel EEG waveform segment `CSV`
+- one segment-level EEG GFP trace and GFP peak table `CSV`
+
+Use `scripts/06_eeg_microstate_overview.Rmd` to integrate those outputs into one styled EEG microstate overview figure.
+
+Example:
+
+```powershell
+Rscript -e "rmarkdown::render('scripts/06_eeg_microstate_overview.Rmd', params=list(input_dir='artifacts/manual/eeg_microstate_overview', runtime_hash='97411c0ec4', output_dir='artifacts/manual/eeg_microstate_overview'))"
+```
+
+The document writes one combined overview `SVG` plus separate `SVG` panels for EEG microstate topographies, parameter distributions, within-participant coverage composition, the EEG microstate transition matrix, and a representative 19-channel EEG waveform with GFP peak markers. Its visual style matches the SEEG archetype statistics and relationship figures.
 
 ## Maintained Supplementary Figure Inputs
 

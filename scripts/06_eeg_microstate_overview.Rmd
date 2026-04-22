@@ -1,0 +1,568 @@
+---
+title: "EEG Microstate Overview"
+output: html_document
+params:
+  input_dir: "artifacts/manual/eeg_microstate_overview"
+  runtime_hash: "97411c0ec4"
+  output_dir: "artifacts/manual/eeg_microstate_overview"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    stop("A non-empty path parameter is required.")
+  }
+  is_absolute <- grepl("^[A-Za-z]:[/\\\\]|^/", path)
+  candidates <- if (is_absolute) c(path) else c(path, file.path("..", path))
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve path:", path))
+  }
+  candidate <- candidates[[length(candidates)]]
+  normalizePath(candidate, winslash = "/", mustWork = FALSE)
+}
+
+for (pkg in c("svglite", "ggdist", "ggtext", "paletteer", "patchwork")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(paste0("Missing required package '", pkg, "'. Install it with: install.packages('", pkg, "')"))
+  }
+}
+
+library(ggdist)
+library(ggtext)
+library(paletteer)
+library(patchwork)
+
+input_dir <- resolve_repo_path(params$input_dir, must_exist = TRUE)
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+runtime_hash <- params$runtime_hash
+output_stem <- paste0("eeg_microstate_", runtime_hash)
+
+required_paths <- list(
+  template_values = file.path(input_dir, paste0(output_stem, "_template_values.csv")),
+  topomap_grid = file.path(input_dir, paste0(output_stem, "_topomap_grid.csv")),
+  subject_parameters = file.path(input_dir, paste0(output_stem, "_subject_parameters_anonymized.csv")),
+  parameter_long = file.path(input_dir, paste0(output_stem, "_parameter_long.csv")),
+  group_parameters = file.path(input_dir, paste0(output_stem, "_group_parameters.csv")),
+  transition_matrix = file.path(input_dir, paste0(output_stem, "_transition_matrix.csv")),
+  waveform_segment = file.path(input_dir, paste0(output_stem, "_waveform_segment_long.csv")),
+  waveform_gfp = file.path(input_dir, paste0(output_stem, "_waveform_gfp_peaks.csv")),
+  waveform_info = file.path(input_dir, paste0(output_stem, "_waveform_segment_info.csv")),
+  python_topographies = file.path(input_dir, paste0(output_stem, "_cluster_topographies.svg"))
+)
+
+missing_paths <- names(required_paths)[!file.exists(unlist(required_paths))]
+if (length(missing_paths) > 0) {
+  stop(paste(
+    "Missing Python export artifacts:",
+    paste(missing_paths, collapse = ", "),
+    "Run scripts/export_eeg_microstate_overview.py first."
+  ))
+}
+
+template_values <- read.csv(required_paths$template_values, stringsAsFactors = FALSE)
+topomap_grid <- read.csv(required_paths$topomap_grid, stringsAsFactors = FALSE)
+subject_parameters <- read.csv(required_paths$subject_parameters, stringsAsFactors = FALSE)
+parameter_long <- read.csv(required_paths$parameter_long, stringsAsFactors = FALSE)
+group_parameters <- read.csv(required_paths$group_parameters, stringsAsFactors = FALSE)
+transition_matrix <- read.csv(required_paths$transition_matrix, stringsAsFactors = FALSE)
+waveform_segment <- read.csv(required_paths$waveform_segment, stringsAsFactors = FALSE)
+waveform_gfp <- read.csv(required_paths$waveform_gfp, stringsAsFactors = FALSE)
+waveform_info <- read.csv(required_paths$waveform_info, stringsAsFactors = FALSE)
+
+microstate_levels <- paste("Microstate", sort(unique(template_values$microstate)))
+
+template_values <- template_values %>%
+  mutate(microstate_label = factor(microstate_label, levels = microstate_levels))
+
+topomap_grid <- topomap_grid %>%
+  mutate(
+    microstate_label = factor(microstate_label, levels = microstate_levels),
+    inside_head = as.logical(inside_head)
+  )
+
+subject_parameters <- subject_parameters %>%
+  mutate(microstate_label = factor(microstate_label, levels = microstate_levels))
+
+parameter_long <- parameter_long %>%
+  mutate(
+    microstate_label = factor(microstate_label, levels = microstate_levels),
+    metric_label = factor(
+      metric_label,
+      levels = c("Coverage (%)", "Mean duration (ms)", "Occurrence (events/s)", "GEV (%)", "Mean template correlation")
+    )
+  )
+
+transition_matrix <- transition_matrix %>%
+  mutate(
+    from_label = factor(from_label, levels = rev(microstate_levels)),
+    to_label = factor(to_label, levels = microstate_levels),
+    transition_pct = mean_transition_probability * 100,
+    transition_label = sprintf("%.1f%%", transition_pct)
+  )
+
+channel_levels <- waveform_segment %>%
+  distinct(channel, channel_order) %>%
+  arrange(channel_order) %>%
+  pull(channel)
+
+waveform_segment <- waveform_segment %>%
+  mutate(
+    channel = factor(channel, levels = channel_levels),
+    channel_group = factor(channel_group, levels = c("Frontal", "Temporal", "Central", "Parietal", "Occipital", "Other"))
+  )
+
+waveform_gfp <- waveform_gfp %>%
+  mutate(is_peak = as.logical(is_peak))
+
+waveform_channels <- waveform_segment %>%
+  distinct(channel, channel_group, channel_y, channel_order) %>%
+  arrange(channel_order)
+
+waveform_peaks <- waveform_gfp %>% filter(is_peak)
+
+waveform_info_value <- function(key) {
+  value <- waveform_info$value[waveform_info$key == key]
+  if (length(value) == 0) {
+    return(NA_character_)
+  }
+  value[[1]]
+}
+
+microstate_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))[c(1, 2, 3, 4)]
+names(microstate_palette) <- microstate_levels
+
+channel_group_palette <- c(
+  Frontal = "#9C3F2E",
+  Temporal = "#D49A51",
+  Central = "#2E6F85",
+  Parietal = "#4F7A45",
+  Occipital = "#6C5A3E",
+  Other = "#6B7280"
+)
+
+bg_fill <- "#FBF7F1"
+panel_fill <- "#FFFDF8"
+grid_color <- "#E4DCCF"
+ink_color <- "#1F2A33"
+muted_color <- "#5B6670"
+warm_low <- "#F4EADC"
+warm_mid <- "#D49A51"
+warm_high <- "#7B2D26"
+cool_low <- "#2166AC"
+hot_high <- "#B2182B"
+
+overview_theme <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      strip.background = element_rect(fill = "#EFE6D8", color = NA),
+      strip.text = ggtext::element_markdown(face = "bold", color = ink_color, lineheight = 1.05),
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
+      axis.title = element_text(face = "bold", color = ink_color),
+      axis.text = element_text(color = ink_color),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = grid_color, linewidth = 0.34),
+      plot.margin = margin(10, 14, 10, 10),
+      panel.spacing = grid::unit(0.9, "lines"),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold", color = ink_color),
+      legend.text = element_text(color = ink_color),
+      plot.tag = element_text(face = "bold", size = rel(1.2), color = ink_color)
+    )
+}
+
+save_svg <- function(plot_obj, output_path, width = 8, height = 5) {
+  ggplot2::ggsave(
+    output_path,
+    plot = plot_obj,
+    width = width,
+    height = height,
+    device = svglite::svglite,
+    bg = bg_fill
+  )
+  output_path
+}
+
+head_outline <- tibble(
+  angle = seq(0, 2 * pi, length.out = 361),
+  x = cos(angle),
+  y = sin(angle)
+)
+nose_outline <- tibble(x = c(-0.09, 0, 0.09), y = c(0.98, 1.13, 0.98))
+left_ear <- tibble(
+  angle = seq(pi / 2, 3 * pi / 2, length.out = 80),
+  x = -1.02 + 0.08 * cos(angle),
+  y = 0.00 + 0.20 * sin(angle)
+)
+right_ear <- tibble(
+  angle = seq(-pi / 2, pi / 2, length.out = 80),
+  x = 1.02 + 0.08 * cos(angle),
+  y = 0.00 + 0.20 * sin(angle)
+)
+
+scale_limit <- max(abs(topomap_grid$value), na.rm = TRUE)
+if (!is.finite(scale_limit) || scale_limit <= 0) {
+  scale_limit <- 1
+}
+
+topography_plot <- ggplot() +
+  geom_raster(
+    data = filter(topomap_grid, inside_head),
+    aes(x = x, y = y, fill = value),
+    interpolate = TRUE
+  ) +
+  geom_contour(
+    data = filter(topomap_grid, inside_head),
+    aes(x = x, y = y, z = value),
+    bins = 7,
+    color = scales::alpha(ink_color, 0.30),
+    linewidth = 0.18
+  ) +
+  geom_path(data = head_outline, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+  geom_path(data = nose_outline, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+  geom_path(data = left_ear, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+  geom_path(data = right_ear, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+  geom_point(
+    data = template_values,
+    aes(x = x, y = y),
+    size = 1.35,
+    color = ink_color,
+    fill = panel_fill,
+    shape = 21,
+    stroke = 0.35
+  ) +
+  facet_wrap(~microstate_label, nrow = 1) +
+  coord_equal(xlim = c(-1.16, 1.16), ylim = c(-1.16, 1.16), clip = "off") +
+  scale_fill_gradient2(
+    low = cool_low,
+    mid = "#F7F3EA",
+    high = hot_high,
+    midpoint = 0,
+    limits = c(-scale_limit, scale_limit),
+    oob = scales::squish,
+    name = "Template\nloading"
+  ) +
+  labs(x = NULL, y = NULL) +
+  theme_void(base_size = 10.6) +
+  theme(
+    plot.background = element_rect(fill = bg_fill, color = NA),
+    panel.background = element_rect(fill = panel_fill, color = NA),
+    strip.background = element_rect(fill = "#EFE6D8", color = NA),
+    strip.text = ggtext::element_markdown(face = "bold", color = ink_color),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", color = ink_color),
+    legend.text = element_text(color = ink_color),
+    plot.margin = margin(10, 14, 10, 10),
+    plot.tag = element_text(face = "bold", size = 13, color = ink_color)
+  )
+
+parameter_metrics <- c("coverage_pct", "mean_duration_ms", "occurrence_per_sec", "gev_pct")
+parameter_distribution_df <- parameter_long %>%
+  filter(metric %in% parameter_metrics) %>%
+  mutate(metric_label = droplevels(metric_label))
+
+parameter_distribution_plot <- ggplot(
+  parameter_distribution_df,
+  aes(x = microstate_label, y = value, fill = microstate_label, color = microstate_label)
+) +
+  geom_violin(width = 0.72, alpha = 0.28, linewidth = 0.22, scale = "width", trim = TRUE) +
+  geom_boxplot(width = 0.16, outlier.shape = NA, alpha = 0.74, linewidth = 0.28, color = ink_color) +
+  geom_point(
+    position = position_jitter(width = 0.075, height = 0, seed = 97411),
+    size = 1.35,
+    alpha = 0.74,
+    stroke = 0
+  ) +
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    shape = 23,
+    size = 2.5,
+    fill = panel_fill,
+    color = ink_color,
+    stroke = 0.42
+  ) +
+  facet_wrap(~metric_label, scales = "free_y", nrow = 2) +
+  scale_fill_manual(values = microstate_palette, guide = "none") +
+  scale_color_manual(values = microstate_palette, guide = "none") +
+  labs(
+    x = "EEG microstate",
+    y = "Parameter value"
+  ) +
+  overview_theme(base_size = 10.2) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, face = "bold"),
+    panel.grid.major.x = element_blank()
+  )
+
+coverage_df <- subject_parameters %>%
+  group_by(patient_alias) %>%
+  mutate(
+    coverage_total = sum(coverage_pct, na.rm = TRUE),
+    coverage_composition = coverage_pct / coverage_total * 100
+  ) %>%
+  ungroup()
+
+subject_order <- coverage_df %>%
+  group_by(patient_alias) %>%
+  summarise(
+    dominant_microstate = microstate_label[which.max(coverage_composition)],
+    dominant_value = max(coverage_composition, na.rm = TRUE),
+    entropy = {
+      p <- coverage_composition / 100
+      -sum(p * log(p + 1e-12)) / log(length(p))
+    },
+    .groups = "drop"
+  ) %>%
+  arrange(dominant_microstate, desc(dominant_value), entropy)
+
+coverage_df <- coverage_df %>%
+  mutate(patient_alias = factor(patient_alias, levels = rev(subject_order$patient_alias)))
+
+coverage_composition_plot <- ggplot(
+  coverage_df,
+  aes(x = coverage_composition, y = patient_alias, fill = microstate_label)
+) +
+  geom_col(width = 0.78, color = panel_fill, linewidth = 0.22) +
+  scale_fill_manual(values = microstate_palette, name = "EEG microstate") +
+  scale_x_continuous(labels = function(x) paste0(x, "%"), expand = expansion(mult = c(0, 0.01))) +
+  labs(
+    x = "Within-participant EEG time share",
+    y = "Anonymized participant"
+  ) +
+  overview_theme(base_size = 10.2) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_text(size = 7.5),
+    legend.position = "bottom"
+  )
+
+transition_plot <- ggplot(
+  transition_matrix,
+  aes(x = to_label, y = from_label, fill = transition_pct)
+) +
+  geom_tile(color = panel_fill, linewidth = 0.55) +
+  geom_text(aes(label = transition_label), color = ink_color, size = 3.25, fontface = "bold") +
+  scale_fill_gradientn(
+    colors = c(warm_low, warm_mid, warm_high),
+    name = "Transition\nprobability"
+  ) +
+  labs(
+    x = "Target EEG microstate",
+    y = "Source EEG microstate"
+  ) +
+  overview_theme(base_size = 10.2) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 28, hjust = 1, face = "bold"),
+    axis.text.y = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+gfp_trace_plot <- ggplot(waveform_gfp, aes(x = relative_time_ms, y = gfp_uv)) +
+  geom_area(fill = scales::alpha(hot_high, 0.18), color = NA) +
+  geom_line(color = hot_high, linewidth = 0.48) +
+  geom_point(
+    data = waveform_peaks,
+    aes(x = relative_time_ms, y = gfp_uv),
+    shape = 21,
+    size = 1.65,
+    stroke = 0.35,
+    color = ink_color,
+    fill = hot_high
+  ) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0))) +
+  labs(
+    x = NULL,
+    y = "EEG GFP (uV)"
+  ) +
+  overview_theme(base_size = 9.7) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    plot.margin = margin(8, 12, 0, 10)
+  )
+
+waveform_trace_plot <- ggplot(waveform_segment, aes(x = relative_time_ms)) +
+  geom_vline(
+    data = waveform_peaks,
+    aes(xintercept = relative_time_ms),
+    color = scales::alpha(hot_high, 0.18),
+    linewidth = 0.32
+  ) +
+  geom_hline(
+    data = waveform_channels,
+    aes(yintercept = channel_y),
+    color = scales::alpha(grid_color, 0.72),
+    linewidth = 0.22
+  ) +
+  geom_line(
+    aes(y = display_y, group = channel, color = channel_group),
+    linewidth = 0.38,
+    alpha = 0.94
+  ) +
+  scale_color_manual(values = channel_group_palette, name = "Channel group", drop = FALSE) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0))) +
+  scale_y_continuous(
+    breaks = waveform_channels$channel_y,
+    labels = waveform_channels$channel,
+    expand = expansion(mult = c(0.015, 0.035))
+  ) +
+  labs(
+    x = "Time within EEG segment (ms)",
+    y = "19 EEG channels"
+  ) +
+  overview_theme(base_size = 9.7) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.y = element_text(size = 7.6, face = "bold"),
+    legend.position = "bottom",
+    plot.margin = margin(0, 12, 8, 10)
+  )
+
+waveform_gfp_plot <- gfp_trace_plot / waveform_trace_plot +
+  patchwork::plot_layout(heights = c(0.55, 2.15), guides = "collect") &
+  theme(
+    plot.background = element_rect(fill = bg_fill, color = NA),
+    legend.position = "bottom"
+  )
+
+main_panel_plot <- topography_plot /
+  (parameter_distribution_plot | coverage_composition_plot) /
+  transition_plot /
+  waveform_gfp_plot +
+  patchwork::plot_layout(heights = c(0.76, 1.08, 0.76, 1.18), widths = c(1.15, 1)) +
+  patchwork::plot_annotation(tag_levels = "A") &
+  theme(
+    plot.background = element_rect(fill = bg_fill, color = NA),
+    plot.tag = element_text(face = "bold", size = 13, color = ink_color)
+  )
+
+topography_path <- file.path(output_dir, paste0(output_stem, "_topography_panel.svg"))
+parameter_distribution_path <- file.path(output_dir, paste0(output_stem, "_parameter_distributions.svg"))
+coverage_composition_path <- file.path(output_dir, paste0(output_stem, "_coverage_composition.svg"))
+transition_plot_path <- file.path(output_dir, paste0(output_stem, "_transition_matrix.svg"))
+waveform_gfp_path <- file.path(output_dir, paste0(output_stem, "_waveform_gfp_segment.svg"))
+main_panel_path <- file.path(output_dir, paste0(output_stem, "_main_panel.svg"))
+
+save_svg(topography_plot, topography_path, width = 12.8, height = 4.1)
+save_svg(parameter_distribution_plot, parameter_distribution_path, width = 9.2, height = 6.2)
+save_svg(coverage_composition_plot, coverage_composition_path, width = 8.2, height = 6.2)
+save_svg(transition_plot, transition_plot_path, width = 7.4, height = 5.8)
+save_svg(waveform_gfp_plot, waveform_gfp_path, width = 15.8, height = 7.4)
+save_svg(main_panel_plot, main_panel_path, width = 16.8, height = 20.2)
+```
+
+## Inputs
+
+```{r input-summary}
+knitr::kable(
+  data.frame(
+    item = c(
+      "input_dir",
+      "runtime_hash",
+      "python_topographies",
+      "subject_parameters",
+      "group_parameters",
+      "transition_matrix",
+      "waveform_segment",
+      "waveform_gfp",
+      "output_dir"
+    ),
+    value = c(
+      input_dir,
+      runtime_hash,
+      required_paths$python_topographies,
+      required_paths$subject_parameters,
+      required_paths$group_parameters,
+      required_paths$transition_matrix,
+      required_paths$waveform_segment,
+      required_paths$waveform_gfp,
+      output_dir
+    )
+  ),
+  col.names = c("Item", "Value")
+)
+```
+
+## Group Parameters
+
+```{r group-parameters}
+knitr::kable(
+  group_parameters %>%
+    select(microstate_label, metric_label, mean, std, median, min, max) %>%
+    mutate(across(c(mean, std, median, min, max), ~round(.x, 3)))
+)
+```
+
+## Main Panel
+
+```{r main-panel, fig.width=16.8, fig.height=20.2}
+main_panel_plot
+```
+
+## Topography Panel
+
+```{r topography-panel, fig.width=12.8, fig.height=4.1}
+topography_plot
+```
+
+## Parameter Distributions
+
+```{r parameter-distributions, fig.width=9.2, fig.height=6.2}
+parameter_distribution_plot
+```
+
+## Coverage Composition
+
+```{r coverage-composition, fig.width=8.2, fig.height=6.2}
+coverage_composition_plot
+```
+
+## Transition Matrix
+
+```{r transition-matrix, fig.width=7.4, fig.height=5.8}
+transition_plot
+```
+
+## EEG Waveform and GFP Peaks
+
+```{r waveform-gfp, fig.width=15.8, fig.height=7.4}
+waveform_gfp_plot
+```
+
+## Outputs
+
+```{r outputs-table}
+output_manifest <- data.frame(
+  artifact = c(
+    basename(topography_path),
+    basename(parameter_distribution_path),
+    basename(coverage_composition_path),
+    basename(transition_plot_path),
+    basename(waveform_gfp_path),
+    basename(main_panel_path)
+  ),
+  path = c(
+    topography_path,
+    parameter_distribution_path,
+    coverage_composition_path,
+    transition_plot_path,
+    waveform_gfp_path,
+    main_panel_path
+  )
+)
+knitr::kable(output_manifest)
+```

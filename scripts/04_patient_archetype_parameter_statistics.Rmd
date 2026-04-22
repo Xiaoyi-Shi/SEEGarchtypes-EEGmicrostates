@@ -123,6 +123,66 @@ summary_table_wide <- summary_stats %>%
   mutate(across(c(mean, sd, median, q1, q3, min, max), ~round(.x, 3))) %>%
   arrange(metric_label, archetype_label)
 
+yeo17_network_order <- c(
+  "VisCent",
+  "VisPeri",
+  "SomMotA",
+  "SomMotB",
+  "DorsAttnA",
+  "DorsAttnB",
+  "SalVentAttnA",
+  "SalVentAttnB",
+  "LimbicA",
+  "LimbicB",
+  "ContA",
+  "ContB",
+  "ContC",
+  "DefaultA",
+  "DefaultB",
+  "DefaultC",
+  "TempPar"
+)
+
+missing_network_cols <- setdiff(yeo17_network_order, names(raw_df))
+if (length(missing_network_cols) > 0) {
+  stop(paste("Input CSV is missing Yeo17 network columns:", paste(missing_network_cols, collapse = ", ")))
+}
+
+network_loading_long <- raw_df %>%
+  select(patient_id, archetype, archetype_label, all_of(yeo17_network_order)) %>%
+  pivot_longer(
+    cols = all_of(yeo17_network_order),
+    names_to = "network",
+    values_to = "loading"
+  ) %>%
+  mutate(network = factor(network, levels = yeo17_network_order))
+
+network_loading_summary <- network_loading_long %>%
+  group_by(archetype, archetype_label, network) %>%
+  summarise(
+    n_support = sum(is.finite(loading)),
+    mean_loading = {
+      values <- loading[is.finite(loading)]
+      if (length(values) > 0) mean(values) else NA_real_
+    },
+    sd_loading = {
+      values <- loading[is.finite(loading)]
+      if (length(values) > 1) sd(values) else NA_real_
+    },
+    median_loading = {
+      values <- loading[is.finite(loading)]
+      if (length(values) > 0) median(values) else NA_real_
+    },
+    .groups = "drop"
+  ) %>%
+  group_by(archetype_label) %>%
+  mutate(
+    abs_rank = rank(-abs(mean_loading), ties.method = "first", na.last = "keep"),
+    extreme_label = ifelse(is.finite(mean_loading) & abs_rank <= 3, sprintf("%+.2f", mean_loading), ""),
+    text_color = ifelse(is.finite(mean_loading) & abs(mean_loading) > 0.34, "white", "#1F2A33")
+  ) %>%
+  ungroup()
+
 archetype_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))[c(1, 2, 3, 4)]
 names(archetype_palette) <- levels(raw_df$archetype_label)
 
@@ -366,24 +426,70 @@ patient_archetype_heatmap_plot <- ggplot(
     legend.position = "right"
   )
 
+# E. Yeo17 network loading profile: signed heatmap highlights high and low networks.
+network_loading_limit <- max(abs(network_loading_summary$mean_loading), na.rm = TRUE)
+if (!is.finite(network_loading_limit) || network_loading_limit <= 0) {
+  network_loading_limit <- 1
+}
+
+yeo17_network_loading_plot <- ggplot(
+  network_loading_summary,
+  aes(x = network, y = archetype_label, fill = mean_loading)
+) +
+  geom_tile(color = panel_fill, linewidth = 0.45) +
+  geom_text(
+    aes(label = extreme_label, color = text_color),
+    size = 2.65,
+    fontface = "bold",
+    show.legend = FALSE
+  ) +
+  scale_color_identity() +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "#F7F3EA",
+    high = "#B2182B",
+    midpoint = 0,
+    limits = c(-network_loading_limit, network_loading_limit),
+    oob = scales::squish,
+    na.value = "#D8D0C2",
+    name = "Mean Yeo17 loading"
+  ) +
+  labs(
+    x = "Yeo17 network",
+    y = "SEEG archetype"
+  ) +
+  parameter_theme(base_size = 10.2) +
+  guides(fill = guide_colorbar(barwidth = 12, barheight = 0.55)) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 42, hjust = 1, vjust = 1, face = "bold", size = 8.2),
+    axis.text.y = element_text(face = "bold"),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold", color = ink_color)
+  )
+
 main_panel_plot <- (occupancy_composition_plot | dwell_estimation_plot) /
   (assignment_similarity_ranked_plot | patient_archetype_heatmap_plot) +
   patchwork::plot_layout(heights = c(1, 1.05), widths = c(0.9, 1.35))
 
 summary_csv_path <- file.path(output_dir, paste0(output_stem, "_parameter_summary_stats.csv"))
 long_csv_path <- file.path(output_dir, paste0(output_stem, "_parameter_long.csv"))
+network_loading_csv_path <- file.path(output_dir, paste0(output_stem, "_yeo17_network_loading_summary.csv"))
 occupancy_composition_path <- file.path(output_dir, paste0(output_stem, "_occupancy_composition.svg"))
 dwell_estimation_path <- file.path(output_dir, paste0(output_stem, "_dwell_paired_estimation.svg"))
 similarity_ranked_path <- file.path(output_dir, paste0(output_stem, "_assignment_similarity_ranked.svg"))
 heatmap_path <- file.path(output_dir, paste0(output_stem, "_patient_archetype_parameter_heatmap.svg"))
+network_loading_path <- file.path(output_dir, paste0(output_stem, "_yeo17_network_loading_heatmap.svg"))
 main_panel_path <- file.path(output_dir, paste0(output_stem, "_parameter_main_panel.svg"))
 
 write.csv(summary_table_wide, summary_csv_path, row.names = FALSE)
 write.csv(long_df, long_csv_path, row.names = FALSE)
+write.csv(network_loading_summary, network_loading_csv_path, row.names = FALSE)
 save_panel(occupancy_composition_plot, occupancy_composition_path, width = 8.5, height = 7.2, dpi = 320)
 save_panel(dwell_estimation_plot, dwell_estimation_path, width = 12, height = 6.4, dpi = 320)
 save_panel(assignment_similarity_ranked_plot, similarity_ranked_path, width = 11.5, height = 5.7, dpi = 320)
 save_panel(patient_archetype_heatmap_plot, heatmap_path, width = 11.5, height = 6.8, dpi = 320)
+save_panel(yeo17_network_loading_plot, network_loading_path, width = 13.5, height = 5.4, dpi = 320)
 save_panel(main_panel_plot, main_panel_path, width = 18, height = 13, dpi = 320)
 ```
 
@@ -440,6 +546,12 @@ assignment_similarity_ranked_plot
 patient_archetype_heatmap_plot
 ```
 
+## Yeo17 Network Loading Heatmap
+
+```{r yeo17-network-loading, fig.width=13.5, fig.height=5.4}
+yeo17_network_loading_plot
+```
+
 ## Outputs
 
 ```{r outputs-table}
@@ -447,19 +559,23 @@ output_manifest <- data.frame(
   artifact = c(
     basename(summary_csv_path),
     basename(long_csv_path),
+    basename(network_loading_csv_path),
     basename(occupancy_composition_path),
     basename(dwell_estimation_path),
     basename(similarity_ranked_path),
     basename(heatmap_path),
+    basename(network_loading_path),
     basename(main_panel_path)
   ),
   path = c(
     summary_csv_path,
     long_csv_path,
+    network_loading_csv_path,
     occupancy_composition_path,
     dwell_estimation_path,
     similarity_ranked_path,
     heatmap_path,
+    network_loading_path,
     main_panel_path
   )
 )

@@ -697,21 +697,6 @@ wheels = [
 ]
 
 [[package]]
-name = "enigmatoolbox"
-version = "2.0.3"
-source = { git = "https://github.com/MICA-MNI/ENIGMA.git?rev=v2.0.3#8884819d808e6b1e09eee6d2b662b5906799f182" }
-dependencies = [
-    { name = "matplotlib" },
-    { name = "nibabel" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "vtk" },
-]
-
-[[package]]
 name = "et-xmlfile"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3246,7 +3231,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "bctpy" },
-    { name = "enigmatoolbox" },
     { name = "mne", extra = ["full"] },
     { name = "mne-connectivity" },
     { name = "numpy" },
@@ -3265,7 +3249,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bctpy", specifier = ">=0.6.1,<0.7" },
-    { name = "enigmatoolbox", git = "https://github.com/MICA-MNI/ENIGMA.git?rev=v2.0.3" },
     { name = "mne", extras = ["full"], specifier = "==1.11" },
     { name = "mne-connectivity", specifier = ">=0.7.0" },
     { name = "numpy", specifier = ">=2.4.2" },
