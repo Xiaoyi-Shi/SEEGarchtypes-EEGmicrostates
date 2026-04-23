@@ -225,6 +225,30 @@ The document writes:
 - one Yeo17 weighted-loading heatmap `SVG`
 - one paired EEG-SEEG relationship heatmap `SVG`
 
+## IDE-A versus Seizure Stage Comparison R Markdown
+
+Use `scripts/08_ide_a_vs_seizure_stage_comparison.Rmd` when you want to compare the IDE-A baseline state space against `pre`, `LVFA`, `SZ`, and `post` seizure stages with patient-first deltas.
+
+Example:
+
+```powershell
+Rscript -e "rmarkdown::render('scripts/08_ide_a_vs_seizure_stage_comparison.Rmd', params=list(ide_runtime_hash='97411c0ec4', seizure_dir='artifacts/manual/seizure_stage_trajectory', output_dir='artifacts/manual/ide_a_vs_seizure_stage_comparison'))"
+```
+
+The document reads the seizure-stage CSV exports plus IDE-A baseline artifacts. SEEG archetype and Yeo17 baselines come from `artifacts/manual/patient_archetype_tables/patient_archetype_yeo17_summary_<hash>.csv`; EEG microstate baselines and patient-level EEG-SEEG relationship baselines can be derived from existing Parquet caches through `uv run python`, so the R workflow does not require the R `arrow` package.
+
+The document writes:
+
+- one cohort/QC denominator `SVG`
+- one EEG microstate stage-minus-IDE-A delta `SVG`
+- one SEEG archetype stage-minus-IDE-A delta `SVG`
+- one Yeo17 signed loading-delta heatmap `SVG`
+- one EEG-SEEG relationship signed-delta heatmap `SVG`
+- one combined overview `SVG`
+- patient-level baseline, stage, delta, group-estimate, denominator/QC, and model-ready long `CSV` tables
+
+Primary plots use patient-level matched deltas, while `ide_a_vs_sz_model_ready_long.csv` preserves seizure-level traceability and `seizure_type` labels for later mixed-effects modeling.
+
 ## Maintained Supplementary Figure Inputs
 
 `scripts/02_supplementary_figures.Rmd` expects retained supplementary tables such as:

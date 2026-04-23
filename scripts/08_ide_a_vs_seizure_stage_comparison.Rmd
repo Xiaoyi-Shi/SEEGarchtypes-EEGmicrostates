@@ -1,0 +1,1061 @@
+---
+title: "IDE-A vs Seizure Stage Comparison"
+output: html_document
+params:
+  ide_runtime_hash: "97411c0ec4"
+  seizure_dir: "artifacts/manual/seizure_stage_trajectory"
+  output_dir: "artifacts/manual/ide_a_vs_seizure_stage_comparison"
+  ide_eeg_metrics_csv: ""
+  ide_eeg_labels_path: "artifacts/cache/eeg/microstate_labels_band_1_40_97411c0ec4.parquet"
+  ide_seeg_archetype_csv: "artifacts/manual/patient_archetype_tables/patient_archetype_yeo17_summary_97411c0ec4.csv"
+  ide_relationship_path: "artifacts/cache/coupling/subject_archetype_eeg_state_preference_explore_archetype_conditioned_eeg_topography_ce682310_97411c0ec4.parquet"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+
+for (pkg in c("svglite", "ggdist", "ggtext", "paletteer", "patchwork")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(paste0("Missing required package '", pkg, "'. Install it with: install.packages('", pkg, "')"))
+  }
+}
+
+library(ggdist)
+library(ggtext)
+library(paletteer)
+library(patchwork)
+
+set.seed(97411)
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    if (must_exist) {
+      stop("A non-empty path parameter is required.")
+    }
+    return("")
+  }
+  is_absolute <- grepl("^[A-Za-z]:[/\\\\]|^/", path)
+  candidates <- if (is_absolute) c(path) else c(path, file.path("..", path))
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve path:", path))
+  }
+  for (candidate in candidates) {
+    if (file.exists(candidate)) {
+      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+    }
+  }
+  normalizePath(candidates[[length(candidates)]], winslash = "/", mustWork = FALSE)
+}
+
+resolve_optional_path <- function(path) {
+  if (is.null(path) || !nzchar(path)) {
+    return("")
+  }
+  resolve_repo_path(path, must_exist = TRUE)
+}
+
+find_first_existing <- function(candidates, label, required = TRUE) {
+  candidates <- candidates[nzchar(candidates)]
+  for (candidate in candidates) {
+    matches <- Sys.glob(candidate)
+    if (length(matches) > 0) {
+      return(normalizePath(sort(matches)[[1]], winslash = "/", mustWork = TRUE))
+    }
+    if (file.exists(candidate)) {
+      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+    }
+    parent_candidate <- file.path("..", candidate)
+    parent_matches <- Sys.glob(parent_candidate)
+    if (length(parent_matches) > 0) {
+      return(normalizePath(sort(parent_matches)[[1]], winslash = "/", mustWork = TRUE))
+    }
+    if (file.exists(parent_candidate)) {
+      return(normalizePath(parent_candidate, winslash = "/", mustWork = TRUE))
+    }
+  }
+  if (required) {
+    stop(paste("Could not find required input for", label, "from candidates:", paste(candidates, collapse = "; ")))
+  }
+  ""
+}
+
+validate_cols <- function(df, required_cols, label) {
+  missing_cols <- setdiff(required_cols, names(df))
+  if (length(missing_cols) > 0) {
+    stop(paste(label, "is missing required columns:", paste(missing_cols, collapse = ", ")))
+  }
+  df
+}
+
+write_csv <- function(df, file_name) {
+  path <- file.path(output_dir, file_name)
+  write.csv(df, path, row.names = FALSE)
+  path
+}
+
+run_uv_python <- function(script_lines, args, label) {
+  script_path <- tempfile(pattern = "ide_sz_", fileext = ".py")
+  writeLines(script_lines, script_path, useBytes = TRUE)
+  uv_path <- Sys.which("uv")
+  if (nzchar(uv_path)) {
+    command <- uv_path
+    command_args <- c("run", "python", script_path, args)
+  } else {
+    python_path <- Sys.which("python")
+    if (!nzchar(python_path)) {
+      stop(paste("Neither 'uv' nor 'python' was found while running", label))
+    }
+    command <- python_path
+    command_args <- c(script_path, args)
+  }
+  result <- system2(command, command_args, stdout = TRUE, stderr = TRUE)
+  status <- attr(result, "status")
+  if (!is.null(status) && status != 0) {
+    stop(paste(label, "failed:", paste(result, collapse = "\n")))
+  }
+  invisible(result)
+}
+
+convert_parquet_to_csv <- function(input_path, output_path, label) {
+  if (file.exists(output_path)) {
+    return(output_path)
+  }
+  script <- c(
+    "from __future__ import annotations",
+    "import argparse",
+    "import pandas as pd",
+    "parser = argparse.ArgumentParser()",
+    "parser.add_argument('--input', required=True)",
+    "parser.add_argument('--output', required=True)",
+    "args = parser.parse_args()",
+    "df = pd.read_parquet(args.input)",
+    "df.to_csv(args.output, index=False)"
+  )
+  run_uv_python(script, c("--input", input_path, "--output", output_path), label)
+  output_path
+}
+
+derive_eeg_baseline_from_labels <- function(labels_path, output_path) {
+  if (file.exists(output_path)) {
+    return(output_path)
+  }
+  script <- c(
+    "from __future__ import annotations",
+    "import argparse",
+    "import numpy as np",
+    "import pandas as pd",
+    "",
+    "parser = argparse.ArgumentParser()",
+    "parser.add_argument('--input', required=True)",
+    "parser.add_argument('--output', required=True)",
+    "args = parser.parse_args()",
+    "df = pd.read_parquet(args.input) if args.input.lower().endswith('.parquet') else pd.read_csv(args.input)",
+    "required = {'patient_id', 'sample', 'microstate'}",
+    "missing = sorted(required.difference(df.columns))",
+    "if missing:",
+    "    raise SystemExit('EEG label table missing columns: ' + ', '.join(missing))",
+    "df['patient_id'] = df['patient_id'].astype(str)",
+    "if 'time_sec' in df.columns:",
+    "    df['time_sec'] = pd.to_numeric(df['time_sec'], errors='coerce')",
+    "if 'corr' in df.columns:",
+    "    df['corr'] = pd.to_numeric(df['corr'], errors='coerce')",
+    "rows = []",
+    "microstates = sorted(pd.to_numeric(df['microstate'], errors='coerce').dropna().astype(int).unique().tolist())",
+    "for patient_id, sub in df.sort_values(['patient_id', 'sample']).groupby('patient_id', sort=True):",
+    "    labels = pd.to_numeric(sub['microstate'], errors='coerce').to_numpy(dtype=float)",
+    "    valid_mask = np.isfinite(labels)",
+    "    labels = labels[valid_mask].astype(int)",
+    "    if labels.size == 0:",
+    "        continue",
+    "    if 'time_sec' in sub.columns:",
+    "        times = sub.loc[valid_mask, 'time_sec'].to_numpy(dtype=float)",
+    "        finite_times = times[np.isfinite(times)]",
+    "        diffs = np.diff(np.sort(finite_times)) if finite_times.size > 1 else np.array([], dtype=float)",
+    "        sample_period = float(np.nanmedian(diffs)) if diffs.size else 0.004",
+    "    else:",
+    "        sample_period = 0.004",
+    "    if not np.isfinite(sample_period) or sample_period <= 0:",
+    "        sample_period = 0.004",
+    "    total_samples = int(labels.size)",
+    "    total_duration_sec = total_samples * sample_period",
+    "    corr_values = sub.loc[valid_mask, 'corr'].to_numpy(dtype=float) if 'corr' in sub.columns else np.full(total_samples, np.nan)",
+    "    run_lengths_by_state = {state: [] for state in microstates}",
+    "    start = 0",
+    "    for idx in range(1, labels.size + 1):",
+    "        if idx == labels.size or labels[idx] != labels[start]:",
+    "            state = int(labels[start])",
+    "            run_lengths_by_state.setdefault(state, []).append(idx - start)",
+    "            start = idx",
+    "    for state in microstates:",
+    "        mask = labels == state",
+    "        run_lengths = np.asarray(run_lengths_by_state.get(state, []), dtype=float)",
+    "        n_runs = int(run_lengths.size)",
+    "        n_samples = int(mask.sum())",
+    "        rows.append({",
+    "            'patient_id': patient_id,",
+    "            'microstate': state,",
+    "            'occupancy': n_samples / total_samples if total_samples else np.nan,",
+    "            'mean_dwell_sec': float(np.nanmean(run_lengths * sample_period)) if n_runs else np.nan,",
+    "            'occurrence_per_min': n_runs / total_duration_sec * 60.0 if total_duration_sec > 0 else np.nan,",
+    "            'mean_confidence': float(np.nanmean(corr_values[mask])) if n_samples and np.isfinite(corr_values[mask]).any() else np.nan,",
+    "            'n_samples': n_samples,",
+    "            'n_runs': n_runs,",
+    "            'total_valid_samples': total_samples,",
+    "            'total_duration_sec': total_duration_sec,",
+    "        })",
+    "pd.DataFrame(rows).to_csv(args.output, index=False)"
+  )
+  run_uv_python(script, c("--input", labels_path, "--output", output_path), "derive IDE-A EEG baseline")
+  output_path
+}
+
+read_table_auto <- function(path, required_cols, label, cache_name = NULL) {
+  ext <- tolower(tools::file_ext(path))
+  if (ext == "csv") {
+    df <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  } else if (ext %in% c("xlsx", "xls")) {
+    df <- readxl::read_excel(path)
+  } else if (ext == "parquet") {
+    if (is.null(cache_name)) {
+      cache_name <- paste0(gsub("[^A-Za-z0-9_]+", "_", label), ".csv")
+    }
+    csv_path <- file.path(intermediate_dir, cache_name)
+    convert_parquet_to_csv(path, csv_path, paste("convert", label))
+    df <- read.csv(csv_path, stringsAsFactors = FALSE, check.names = FALSE)
+  } else {
+    stop(paste("Unsupported table extension for", label, ":", path))
+  }
+  validate_cols(df, required_cols, label)
+}
+
+safe_mean <- function(x) {
+  values <- x[is.finite(x)]
+  if (length(values) == 0) {
+    return(NA_real_)
+  }
+  mean(values)
+}
+
+format_stage <- function(x) {
+  factor(x, levels = stage_levels, labels = stage_labels)
+}
+
+format_condition <- function(x) {
+  factor(x, levels = condition_levels, labels = condition_labels)
+}
+
+metric_label <- function(metric) {
+  labels <- c(
+    occupancy = "Occupancy",
+    mean_dwell_sec = "Mean dwell time",
+    occurrence_per_min = "Occurrence",
+    mean_confidence = "Template confidence",
+    assignment_similarity = "Assignment similarity",
+    loading_value = "Yeo17 loading",
+    conditional_probability = "P(EEG microstate | SEEG archetype)"
+  )
+  unname(ifelse(metric %in% names(labels), labels[metric], metric))
+}
+
+metric_plot_value <- function(metric, value) {
+  dplyr::case_when(
+    metric == "occupancy" ~ value * 100,
+    metric == "mean_dwell_sec" ~ value * 1000,
+    metric == "conditional_probability" ~ value * 100,
+    TRUE ~ value
+  )
+}
+
+metric_axis_label <- function(metric) {
+  labels <- c(
+    occupancy = "Difference vs IDE-A (percentage points)",
+    mean_dwell_sec = "Difference vs IDE-A (ms)",
+    occurrence_per_min = "Difference vs IDE-A (runs/min)",
+    mean_confidence = "Difference vs IDE-A (correlation)",
+    assignment_similarity = "Difference vs IDE-A (similarity)",
+    loading_value = "Difference vs IDE-A (loading)",
+    conditional_probability = "Difference vs IDE-A (percentage points)"
+  )
+  unname(ifelse(metric %in% names(labels), labels[metric], "Difference vs IDE-A"))
+}
+
+stage_levels <- c("pre", "LVFA", "SZ", "post")
+stage_labels <- c(pre = "Preictal", LVFA = "LVFA", SZ = "Ictal", post = "Postictal")
+condition_levels <- c("IDE-A", stage_levels)
+condition_labels <- c("IDE-A", stage_labels)
+yeo17_network_order <- c(
+  "VisCent", "VisPeri", "SomMotA", "SomMotB", "DorsAttnA", "DorsAttnB",
+  "SalVentAttnA", "SalVentAttnB", "LimbicA", "LimbicB", "ContA", "ContB",
+  "ContC", "DefaultA", "DefaultB", "DefaultC", "TempPar"
+)
+
+runtime_hash <- params$ide_runtime_hash
+seizure_dir <- resolve_repo_path(params$seizure_dir, must_exist = TRUE)
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+intermediate_dir <- ensure_output_dir(file.path(output_dir, "_intermediate"))
+
+ide_eeg_metrics_path <- if (!is.null(params$ide_eeg_metrics_csv) && nzchar(params$ide_eeg_metrics_csv)) {
+  resolve_repo_path(params$ide_eeg_metrics_csv, must_exist = TRUE)
+} else {
+  labels_path <- find_first_existing(
+    c(
+      params$ide_eeg_labels_path,
+      file.path("artifacts", "cache", "eeg", paste0("microstate_labels_band_1_40_", runtime_hash, ".parquet")),
+      file.path("artifacts", "cache", "eeg", paste0("microstate_labels_band_1_40_", runtime_hash, ".csv"))
+    ),
+    "IDE-A EEG microstate labels"
+  )
+  derive_eeg_baseline_from_labels(labels_path, file.path(intermediate_dir, paste0("ide_a_eeg_microstate_baseline_", runtime_hash, ".csv")))
+}
+
+ide_seeg_archetype_path <- find_first_existing(
+  c(
+    params$ide_seeg_archetype_csv,
+    file.path("artifacts", "manual", "patient_archetype_tables", paste0("patient_archetype_yeo17_summary_", runtime_hash, ".csv"))
+  ),
+  "IDE-A SEEG archetype patient table"
+)
+
+ide_relationship_path <- find_first_existing(
+  c(
+    params$ide_relationship_path,
+    file.path("artifacts", "cache", "coupling", paste0("subject_archetype_eeg_state_preference_*_", runtime_hash, ".parquet")),
+    file.path("artifacts", "runs", "*", "reports", "tables", paste0("subject_archetype_eeg_state_preference_*_", runtime_hash, ".xlsx")),
+    file.path("artifacts", "runs", "*", "reports", "supplementary_tables", paste0("*archetype_eeg_state_preference*_", runtime_hash, ".csv"))
+  ),
+  "IDE-A patient-level SEEG-EEG relationship table"
+)
+
+read_seizure_csv <- function(file_name, required_cols) {
+  path <- file.path(seizure_dir, file_name)
+  if (!file.exists(path)) {
+    stop(paste("Missing seizure-stage input:", path))
+  }
+  read_table_auto(path, required_cols, file_name)
+}
+
+bg_fill <- "#FBF7F1"
+panel_fill <- "#FFFDF8"
+grid_color <- "#E4DCCF"
+ink_color <- "#1F2A33"
+muted_color <- "#5B6670"
+zero_color <- "#7A6F64"
+low_color <- "#2166AC"
+mid_color <- "#F7F3EA"
+high_color <- "#B2182B"
+state_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))
+
+comparison_theme <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      strip.background = element_rect(fill = "#EFE6D8", color = NA),
+      strip.text = ggtext::element_markdown(face = "bold", color = ink_color, lineheight = 1.05),
+      axis.title = element_text(face = "bold", color = ink_color),
+      axis.text = element_text(color = ink_color),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = grid_color, linewidth = 0.34),
+      plot.margin = margin(8, 10, 8, 8),
+      panel.spacing = grid::unit(0.85, "lines"),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold")
+    )
+}
+
+placeholder_panel <- function(label) {
+  ggplot() +
+    annotate("text", x = 0, y = 0, label = label, color = muted_color, size = 3.4, lineheight = 1.1) +
+    xlim(-1, 1) +
+    ylim(-1, 1) +
+    labs(x = NULL, y = NULL) +
+    comparison_theme() +
+    theme(axis.text = element_blank(), panel.grid = element_blank())
+}
+
+save_svg_panel <- function(plot_obj, file_name, width = 8.5, height = 5.2) {
+  output_path <- file.path(output_dir, file_name)
+  ggplot2::ggsave(output_path, plot = plot_obj, width = width, height = height, bg = bg_fill)
+  output_path
+}
+```
+
+```{r build-tables}
+ide_eeg <- read_table_auto(
+  ide_eeg_metrics_path,
+  c("patient_id", "microstate", "occupancy", "mean_dwell_sec", "occurrence_per_min"),
+  "IDE-A EEG microstate baseline"
+) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    microstate = as.integer(microstate),
+    state_id = microstate,
+    state_label = paste("Microstate", microstate),
+    state_kind = "microstate",
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L
+  )
+
+if (!"mean_confidence" %in% names(ide_eeg)) {
+  ide_eeg$mean_confidence <- NA_real_
+}
+
+eeg_stage_raw <- read_seizure_csv(
+  "eeg_microstate_metrics.csv",
+  c("patient_id", "seizure_id", "seizure_type", "stage", "stage_order", "microstate", "occupancy", "mean_dwell_sec", "occurrence_per_min")
+) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    seizure_id = as.character(seizure_id),
+    seizure_type = as.character(seizure_type),
+    stage = as.character(stage),
+    microstate = as.integer(microstate)
+  )
+
+unexpected_stages <- setdiff(unique(eeg_stage_raw$stage), stage_levels)
+if (length(unexpected_stages) > 0) {
+  stop(paste("Unexpected EEG seizure stages:", paste(unexpected_stages, collapse = ", ")))
+}
+
+if (!"mean_confidence" %in% names(eeg_stage_raw)) {
+  eeg_stage_raw$mean_confidence <- NA_real_
+}
+
+eeg_stage_patient <- eeg_stage_raw %>%
+  group_by(patient_id, stage, stage_order, microstate) %>%
+  summarise(
+    occupancy = safe_mean(occupancy),
+    mean_dwell_sec = safe_mean(mean_dwell_sec),
+    occurrence_per_min = safe_mean(occurrence_per_min),
+    mean_confidence = safe_mean(mean_confidence),
+    n_seizures = n_distinct(seizure_id),
+    seizure_type = paste(sort(unique(seizure_type)), collapse = "+"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    state_id = microstate,
+    state_label = paste("Microstate", microstate),
+    state_kind = "microstate",
+    condition = stage
+  )
+
+eeg_metric_cols <- c("occupancy", "mean_dwell_sec", "occurrence_per_min", "mean_confidence")
+
+eeg_baseline_long <- ide_eeg %>%
+  select(patient_id, condition, stage, stage_order, state_kind, state_id, state_label, microstate, all_of(eeg_metric_cols)) %>%
+  pivot_longer(cols = all_of(eeg_metric_cols), names_to = "metric", values_to = "value") %>%
+  mutate(metric_family = "EEG microstate", metric_label = metric_label(metric))
+
+eeg_stage_long <- eeg_stage_patient %>%
+  select(patient_id, seizure_type, n_seizures, condition, stage, stage_order, state_kind, state_id, state_label, microstate, all_of(eeg_metric_cols)) %>%
+  pivot_longer(cols = all_of(eeg_metric_cols), names_to = "metric", values_to = "value") %>%
+  mutate(metric_family = "EEG microstate", metric_label = metric_label(metric))
+
+eeg_delta <- eeg_stage_long %>%
+  inner_join(
+    eeg_baseline_long %>%
+      select(patient_id, microstate, metric, baseline_value = value),
+    by = c("patient_id", "microstate", "metric")
+  ) %>%
+  mutate(delta = value - baseline_value)
+
+ide_seeg_raw <- read_table_auto(
+  ide_seeg_archetype_path,
+  c("patient_id", "archetype", "occupancy", "mean_dwell_ms", "assignment_similarity", yeo17_network_order),
+  "IDE-A SEEG archetype baseline"
+) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    archetype = as.integer(archetype),
+    assigned_archetype = archetype,
+    mean_dwell_sec = mean_dwell_ms / 1000,
+    state_id = assigned_archetype,
+    state_label = paste("Archetype", assigned_archetype),
+    state_kind = "archetype",
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L
+  )
+
+seeg_stage_raw <- read_seizure_csv(
+  "seeg_archetype_metrics.csv",
+  c("patient_id", "seizure_id", "seizure_type", "stage", "stage_order", "assigned_archetype", "occupancy", "mean_dwell_sec", "occurrence_per_min", "mean_confidence")
+) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    seizure_id = as.character(seizure_id),
+    seizure_type = as.character(seizure_type),
+    stage = as.character(stage),
+    assigned_archetype = as.integer(assigned_archetype),
+    assignment_similarity = mean_confidence
+  )
+
+unexpected_stages <- setdiff(unique(seeg_stage_raw$stage), stage_levels)
+if (length(unexpected_stages) > 0) {
+  stop(paste("Unexpected SEEG seizure stages:", paste(unexpected_stages, collapse = ", ")))
+}
+
+seeg_stage_patient <- seeg_stage_raw %>%
+  group_by(patient_id, stage, stage_order, assigned_archetype) %>%
+  summarise(
+    occupancy = safe_mean(occupancy),
+    mean_dwell_sec = safe_mean(mean_dwell_sec),
+    occurrence_per_min = safe_mean(occurrence_per_min),
+    assignment_similarity = safe_mean(assignment_similarity),
+    n_seizures = n_distinct(seizure_id),
+    seizure_type = paste(sort(unique(seizure_type)), collapse = "+"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    state_id = assigned_archetype,
+    state_label = paste("Archetype", assigned_archetype),
+    state_kind = "archetype",
+    condition = stage
+  )
+
+seeg_metric_cols <- c("occupancy", "mean_dwell_sec", "assignment_similarity")
+
+seeg_baseline_long <- ide_seeg_raw %>%
+  select(patient_id, condition, stage, stage_order, state_kind, state_id, state_label, assigned_archetype, all_of(seeg_metric_cols)) %>%
+  pivot_longer(cols = all_of(seeg_metric_cols), names_to = "metric", values_to = "value") %>%
+  mutate(metric_family = "SEEG archetype", metric_label = metric_label(metric))
+
+seeg_stage_long <- seeg_stage_patient %>%
+  select(patient_id, seizure_type, n_seizures, condition, stage, stage_order, state_kind, state_id, state_label, assigned_archetype, all_of(seeg_metric_cols)) %>%
+  pivot_longer(cols = all_of(seeg_metric_cols), names_to = "metric", values_to = "value") %>%
+  mutate(metric_family = "SEEG archetype", metric_label = metric_label(metric))
+
+seeg_delta <- seeg_stage_long %>%
+  inner_join(
+    seeg_baseline_long %>%
+      select(patient_id, assigned_archetype, metric, baseline_value = value),
+    by = c("patient_id", "assigned_archetype", "metric")
+  ) %>%
+  mutate(delta = value - baseline_value)
+
+yeo_baseline_long <- ide_seeg_raw %>%
+  select(patient_id, assigned_archetype, state_label, all_of(yeo17_network_order)) %>%
+  pivot_longer(cols = all_of(yeo17_network_order), names_to = "network", values_to = "baseline_value") %>%
+  mutate(
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L,
+    metric_family = "Yeo17 loading",
+    metric = "loading_value",
+    metric_label = "Yeo17 loading",
+    network = factor(network, levels = yeo17_network_order)
+  )
+
+yeo_stage_raw <- read_seizure_csv(
+  "seeg_yeo_loading_metrics.csv",
+  c("patient_id", "seizure_id", "seizure_type", "stage", "stage_order", "assigned_archetype", "network", "loading_value", "weighted_loading")
+) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    seizure_id = as.character(seizure_id),
+    seizure_type = as.character(seizure_type),
+    stage = as.character(stage),
+    assigned_archetype = as.integer(assigned_archetype),
+    network = as.character(network),
+    state_label = paste("Archetype", assigned_archetype)
+  )
+
+missing_stage_networks <- setdiff(unique(yeo_stage_raw$network), yeo17_network_order)
+if (length(missing_stage_networks) > 0) {
+  stop(paste("Unexpected Yeo17 networks:", paste(missing_stage_networks, collapse = ", ")))
+}
+
+yeo_stage_patient <- yeo_stage_raw %>%
+  group_by(patient_id, stage, stage_order, assigned_archetype, network) %>%
+  summarise(
+    value = safe_mean(loading_value),
+    weighted_loading = safe_mean(weighted_loading),
+    n_seizures = n_distinct(seizure_id),
+    seizure_type = paste(sort(unique(seizure_type)), collapse = "+"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    state_label = paste("Archetype", assigned_archetype),
+    condition = stage,
+    metric_family = "Yeo17 loading",
+    metric = "loading_value",
+    metric_label = "Yeo17 loading",
+    network = factor(network, levels = yeo17_network_order)
+  )
+
+yeo_delta <- yeo_stage_patient %>%
+  inner_join(
+    yeo_baseline_long %>%
+      select(patient_id, assigned_archetype, network, baseline_value),
+    by = c("patient_id", "assigned_archetype", "network")
+  ) %>%
+  mutate(delta = value - baseline_value)
+
+relationship_baseline_raw <- read_table_auto(
+  ide_relationship_path,
+  c("patient_id", "assigned_archetype", "microstate", "conditional_probability"),
+  "IDE-A patient-level SEEG-EEG relationship",
+  cache_name = paste0("ide_a_relationship_baseline_", runtime_hash, ".csv")
+) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    assigned_archetype = as.integer(assigned_archetype),
+    microstate = as.integer(microstate),
+    baseline_value = conditional_probability,
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L,
+    metric_family = "EEG-SEEG relationship",
+    metric = "conditional_probability",
+    metric_label = metric_label(metric),
+    relationship_label = paste0("A", assigned_archetype, " -> M", microstate)
+  )
+
+relationship_stage_raw <- read_seizure_csv(
+  "relationship_metrics.csv",
+  c("patient_id", "seizure_id", "seizure_type", "stage", "stage_order", "field_state", "microstate", "p_microstate_given_field")
+) %>%
+  mutate(
+    patient_id = as.character(patient_id),
+    seizure_id = as.character(seizure_id),
+    seizure_type = as.character(seizure_type),
+    stage = as.character(stage),
+    assigned_archetype = as.integer(field_state),
+    microstate = as.integer(microstate)
+  )
+
+relationship_stage_patient <- relationship_stage_raw %>%
+  group_by(patient_id, stage, stage_order, assigned_archetype, microstate) %>%
+  summarise(
+    value = safe_mean(p_microstate_given_field),
+    n_seizures = n_distinct(seizure_id),
+    seizure_type = paste(sort(unique(seizure_type)), collapse = "+"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    condition = stage,
+    metric_family = "EEG-SEEG relationship",
+    metric = "conditional_probability",
+    metric_label = metric_label(metric),
+    relationship_label = paste0("A", assigned_archetype, " -> M", microstate)
+  )
+
+relationship_delta <- relationship_stage_patient %>%
+  inner_join(
+    relationship_baseline_raw %>%
+      select(patient_id, assigned_archetype, microstate, baseline_value),
+    by = c("patient_id", "assigned_archetype", "microstate")
+  ) %>%
+  mutate(delta = value - baseline_value)
+
+make_delta_summary <- function(delta_df) {
+  delta_df %>%
+    group_by(metric_family, stage, stage_order, metric, metric_label, state_label) %>%
+    summarise(
+      n_patients = n_distinct(patient_id),
+      mean_value = safe_mean(value),
+      mean_baseline = safe_mean(baseline_value),
+      mean_delta = safe_mean(delta),
+      sd_delta = sd(delta, na.rm = TRUE),
+      se_delta = sd_delta / sqrt(n_patients),
+      ci_low = mean_delta - qt(0.975, pmax(n_patients - 1, 1)) * se_delta,
+      ci_high = mean_delta + qt(0.975, pmax(n_patients - 1, 1)) * se_delta,
+      .groups = "drop"
+    )
+}
+
+eeg_delta_summary <- make_delta_summary(eeg_delta)
+seeg_delta_summary <- make_delta_summary(seeg_delta)
+
+yeo_delta_summary <- yeo_delta %>%
+  group_by(metric_family, stage, stage_order, metric, metric_label, state_label, assigned_archetype, network) %>%
+  summarise(
+    n_patients = n_distinct(patient_id),
+    mean_value = safe_mean(value),
+    mean_baseline = safe_mean(baseline_value),
+    mean_delta = safe_mean(delta),
+    sd_delta = sd(delta, na.rm = TRUE),
+    se_delta = sd_delta / sqrt(n_patients),
+    ci_low = mean_delta - qt(0.975, pmax(n_patients - 1, 1)) * se_delta,
+    ci_high = mean_delta + qt(0.975, pmax(n_patients - 1, 1)) * se_delta,
+    .groups = "drop"
+  )
+
+relationship_delta_summary <- relationship_delta %>%
+  group_by(metric_family, stage, stage_order, metric, metric_label, assigned_archetype, microstate, relationship_label) %>%
+  summarise(
+    n_patients = n_distinct(patient_id),
+    mean_value = safe_mean(value),
+    mean_baseline = safe_mean(baseline_value),
+    mean_delta = safe_mean(delta),
+    sd_delta = sd(delta, na.rm = TRUE),
+    se_delta = sd_delta / sqrt(n_patients),
+    ci_low = mean_delta - qt(0.975, pmax(n_patients - 1, 1)) * se_delta,
+    ci_high = mean_delta + qt(0.975, pmax(n_patients - 1, 1)) * se_delta,
+    .groups = "drop"
+  )
+
+denominator_qc <- bind_rows(
+  tibble(
+    metric_family = "EEG microstate",
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L,
+    n_patients = n_distinct(ide_eeg$patient_id),
+    n_seizures = NA_integer_,
+    n_paired_with_ide_a = n_distinct(ide_eeg$patient_id)
+  ),
+  eeg_stage_raw %>%
+    group_by(stage, stage_order) %>%
+    summarise(
+      metric_family = "EEG microstate",
+      condition = first(stage),
+      n_patients = n_distinct(patient_id),
+      n_seizures = n_distinct(paste(patient_id, seizure_id, sep = "::")),
+      n_paired_with_ide_a = n_distinct(patient_id[patient_id %in% ide_eeg$patient_id]),
+      .groups = "drop"
+    ),
+  tibble(
+    metric_family = "SEEG archetype",
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L,
+    n_patients = n_distinct(ide_seeg_raw$patient_id),
+    n_seizures = NA_integer_,
+    n_paired_with_ide_a = n_distinct(ide_seeg_raw$patient_id)
+  ),
+  seeg_stage_raw %>%
+    group_by(stage, stage_order) %>%
+    summarise(
+      metric_family = "SEEG archetype",
+      condition = first(stage),
+      n_patients = n_distinct(patient_id),
+      n_seizures = n_distinct(paste(patient_id, seizure_id, sep = "::")),
+      n_paired_with_ide_a = n_distinct(patient_id[patient_id %in% ide_seeg_raw$patient_id]),
+      .groups = "drop"
+    ),
+  tibble(
+    metric_family = "Yeo17 loading",
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L,
+    n_patients = n_distinct(ide_seeg_raw$patient_id),
+    n_seizures = NA_integer_,
+    n_paired_with_ide_a = n_distinct(ide_seeg_raw$patient_id)
+  ),
+  yeo_stage_raw %>%
+    group_by(stage, stage_order) %>%
+    summarise(
+      metric_family = "Yeo17 loading",
+      condition = first(stage),
+      n_patients = n_distinct(patient_id),
+      n_seizures = n_distinct(paste(patient_id, seizure_id, sep = "::")),
+      n_paired_with_ide_a = n_distinct(patient_id[patient_id %in% ide_seeg_raw$patient_id]),
+      .groups = "drop"
+    ),
+  tibble(
+    metric_family = "EEG-SEEG relationship",
+    condition = "IDE-A",
+    stage = NA_character_,
+    stage_order = -1L,
+    n_patients = n_distinct(relationship_baseline_raw$patient_id),
+    n_seizures = NA_integer_,
+    n_paired_with_ide_a = n_distinct(relationship_baseline_raw$patient_id)
+  ),
+  relationship_stage_raw %>%
+    group_by(stage, stage_order) %>%
+    summarise(
+      metric_family = "EEG-SEEG relationship",
+      condition = first(stage),
+      n_patients = n_distinct(patient_id),
+      n_seizures = n_distinct(paste(patient_id, seizure_id, sep = "::")),
+      n_paired_with_ide_a = n_distinct(patient_id[patient_id %in% relationship_baseline_raw$patient_id]),
+      .groups = "drop"
+    )
+) %>%
+  mutate(
+    condition = factor(condition, levels = condition_levels, labels = condition_labels),
+    metric_family = factor(metric_family, levels = c("EEG microstate", "SEEG archetype", "Yeo17 loading", "EEG-SEEG relationship"))
+  ) %>%
+  arrange(metric_family, stage_order)
+
+baseline_model_ready <- bind_rows(
+  eeg_baseline_long %>%
+    transmute(
+      patient_id, seizure_id = NA_character_, seizure_type = NA_character_, condition, stage, stage_order,
+      metric_family, state_kind, state_id, microstate, assigned_archetype = NA_integer_, network = NA_character_,
+      metric, metric_label, value
+    ),
+  seeg_baseline_long %>%
+    transmute(
+      patient_id, seizure_id = NA_character_, seizure_type = NA_character_, condition, stage, stage_order,
+      metric_family, state_kind, state_id, microstate = NA_integer_, assigned_archetype, network = NA_character_,
+      metric, metric_label, value
+    ),
+  yeo_baseline_long %>%
+    transmute(
+      patient_id, seizure_id = NA_character_, seizure_type = NA_character_, condition, stage, stage_order,
+      metric_family, state_kind = "archetype", state_id = assigned_archetype, microstate = NA_integer_, assigned_archetype,
+      network = as.character(network), metric, metric_label, value = baseline_value
+    ),
+  relationship_baseline_raw %>%
+    transmute(
+      patient_id, seizure_id = NA_character_, seizure_type = NA_character_, condition, stage, stage_order,
+      metric_family, state_kind = "archetype_microstate", state_id = NA_integer_, microstate, assigned_archetype,
+      network = NA_character_, metric, metric_label, value = baseline_value
+    )
+)
+
+stage_model_ready <- bind_rows(
+  eeg_stage_raw %>%
+    select(patient_id, seizure_id, seizure_type, stage, stage_order, microstate, all_of(eeg_metric_cols)) %>%
+    pivot_longer(cols = all_of(eeg_metric_cols), names_to = "metric", values_to = "value") %>%
+    transmute(
+      patient_id, seizure_id, seizure_type, condition = stage, stage, stage_order,
+      metric_family = "EEG microstate", state_kind = "microstate", state_id = microstate, microstate,
+      assigned_archetype = NA_integer_, network = NA_character_, metric, metric_label = metric_label(metric), value
+    ),
+  seeg_stage_raw %>%
+    select(patient_id, seizure_id, seizure_type, stage, stage_order, assigned_archetype, occupancy, mean_dwell_sec, occurrence_per_min, assignment_similarity) %>%
+    pivot_longer(cols = c("occupancy", "mean_dwell_sec", "occurrence_per_min", "assignment_similarity"), names_to = "metric", values_to = "value") %>%
+    transmute(
+      patient_id, seizure_id, seizure_type, condition = stage, stage, stage_order,
+      metric_family = "SEEG archetype", state_kind = "archetype", state_id = assigned_archetype, microstate = NA_integer_,
+      assigned_archetype, network = NA_character_, metric, metric_label = metric_label(metric), value
+    ),
+  yeo_stage_raw %>%
+    select(patient_id, seizure_id, seizure_type, stage, stage_order, assigned_archetype, network, loading_value, weighted_loading) %>%
+    pivot_longer(cols = c("loading_value", "weighted_loading"), names_to = "metric", values_to = "value") %>%
+    transmute(
+      patient_id, seizure_id, seizure_type, condition = stage, stage, stage_order,
+      metric_family = "Yeo17 loading", state_kind = "archetype", state_id = assigned_archetype, microstate = NA_integer_,
+      assigned_archetype, network, metric, metric_label = metric_label(metric), value
+    ),
+  relationship_stage_raw %>%
+    select(patient_id, seizure_id, seizure_type, stage, stage_order, assigned_archetype, microstate, p_microstate_given_field) %>%
+    transmute(
+      patient_id, seizure_id, seizure_type, condition = stage, stage, stage_order,
+      metric_family = "EEG-SEEG relationship", state_kind = "archetype_microstate", state_id = NA_integer_, microstate,
+      assigned_archetype, network = NA_character_, metric = "conditional_probability",
+      metric_label = metric_label(metric), value = p_microstate_given_field
+    )
+)
+
+model_ready_long <- bind_rows(baseline_model_ready, stage_model_ready) %>%
+  mutate(
+    condition = as.character(condition),
+    stage = as.character(stage),
+    value = as.numeric(value)
+  )
+
+patient_delta_long <- bind_rows(
+  eeg_delta %>%
+    transmute(patient_id, seizure_type, stage, stage_order, metric_family, state_kind, state_id, microstate, assigned_archetype = NA_integer_, network = NA_character_, metric, metric_label, value, baseline_value, delta),
+  seeg_delta %>%
+    transmute(patient_id, seizure_type, stage, stage_order, metric_family, state_kind, state_id, microstate = NA_integer_, assigned_archetype, network = NA_character_, metric, metric_label, value, baseline_value, delta),
+  yeo_delta %>%
+    transmute(patient_id, seizure_type, stage, stage_order, metric_family, state_kind = "archetype", state_id = assigned_archetype, microstate = NA_integer_, assigned_archetype, network = as.character(network), metric, metric_label, value, baseline_value, delta),
+  relationship_delta %>%
+    transmute(patient_id, seizure_type, stage, stage_order, metric_family, state_kind = "archetype_microstate", state_id = NA_integer_, microstate, assigned_archetype, network = NA_character_, metric, metric_label, value, baseline_value, delta)
+)
+
+group_delta_estimates <- bind_rows(
+  eeg_delta_summary,
+  seeg_delta_summary,
+  yeo_delta_summary %>% mutate(state_label = paste("Archetype", assigned_archetype)),
+  relationship_delta_summary %>% mutate(state_label = relationship_label)
+)
+
+write_csv(denominator_qc, "ide_a_vs_sz_denominator_qc.csv")
+write_csv(eeg_baseline_long, "ide_a_vs_sz_eeg_microstate_baseline_long.csv")
+write_csv(eeg_stage_long, "ide_a_vs_sz_eeg_microstate_stage_patient_long.csv")
+write_csv(eeg_delta, "ide_a_vs_sz_eeg_microstate_patient_deltas.csv")
+write_csv(eeg_delta_summary, "ide_a_vs_sz_eeg_microstate_group_estimates.csv")
+write_csv(seeg_baseline_long, "ide_a_vs_sz_seeg_archetype_baseline_long.csv")
+write_csv(seeg_stage_long, "ide_a_vs_sz_seeg_archetype_stage_patient_long.csv")
+write_csv(seeg_delta, "ide_a_vs_sz_seeg_archetype_patient_deltas.csv")
+write_csv(seeg_delta_summary, "ide_a_vs_sz_seeg_archetype_group_estimates.csv")
+write_csv(yeo_delta, "ide_a_vs_sz_yeo17_loading_patient_deltas.csv")
+write_csv(yeo_delta_summary, "ide_a_vs_sz_yeo17_loading_group_estimates.csv")
+write_csv(relationship_delta, "ide_a_vs_sz_relationship_patient_deltas.csv")
+write_csv(relationship_delta_summary, "ide_a_vs_sz_relationship_group_estimates.csv")
+write_csv(model_ready_long, "ide_a_vs_sz_model_ready_long.csv")
+write_csv(patient_delta_long, "ide_a_vs_sz_patient_delta_long.csv")
+write_csv(group_delta_estimates, "ide_a_vs_sz_group_delta_estimates.csv")
+```
+
+```{r build-plots}
+denominator_plot <- denominator_qc %>%
+  mutate(
+    condition_label = format_condition(as.character(condition)),
+    plotted_patients = ifelse(as.character(condition) == "IDE-A", n_patients, n_paired_with_ide_a)
+  ) %>%
+  ggplot(aes(x = condition_label, y = plotted_patients, fill = metric_family)) +
+  geom_col(position = position_dodge(width = 0.76), width = 0.66, color = "white", linewidth = 0.25) +
+  geom_text(
+    aes(label = plotted_patients),
+    position = position_dodge(width = 0.76),
+    vjust = -0.35,
+    size = 2.8,
+    color = ink_color
+  ) +
+  scale_fill_manual(values = c(
+    "EEG microstate" = "#4C956C",
+    "SEEG archetype" = "#235789",
+    "Yeo17 loading" = "#D08C60",
+    "EEG-SEEG relationship" = "#C1292E"
+  )) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.14))) +
+  labs(x = "Condition", y = "Matched patients (n)", fill = "Metric family") +
+  comparison_theme()
+
+eeg_plot_df <- eeg_delta %>%
+  filter(metric %in% c("occupancy", "mean_dwell_sec", "occurrence_per_min")) %>%
+  mutate(
+    stage_label = format_stage(stage),
+    metric_label = factor(metric_label, levels = c("Occupancy", "Mean dwell time", "Occurrence")),
+    plot_delta = metric_plot_value(metric, delta),
+    state_label = factor(state_label, levels = paste("Microstate", sort(unique(microstate))))
+  )
+
+if (nrow(eeg_plot_df) > 0) {
+  eeg_plot <- ggplot(eeg_plot_df, aes(x = stage_label, y = plot_delta, color = state_label)) +
+    geom_hline(yintercept = 0, color = zero_color, linewidth = 0.45, linetype = "dashed") +
+    geom_line(aes(group = interaction(patient_id, state_label)), alpha = 0.16, linewidth = 0.28) +
+    geom_point(alpha = 0.28, size = 0.9) +
+    stat_summary(aes(group = state_label), fun = mean, geom = "line", linewidth = 1.05) +
+    stat_summary(aes(group = state_label), fun = mean, geom = "point", size = 2.0) +
+    facet_wrap(~metric_label, scales = "free_y", ncol = 1) +
+    scale_color_manual(values = state_palette[seq_along(levels(eeg_plot_df$state_label))]) +
+    labs(x = "Seizure stage", y = "Stage minus IDE-A baseline", color = "EEG state") +
+    comparison_theme()
+} else {
+  eeg_plot <- placeholder_panel("No matched EEG microstate comparison rows are available.")
+}
+
+seeg_plot_df <- seeg_delta %>%
+  filter(metric %in% c("occupancy", "mean_dwell_sec", "assignment_similarity")) %>%
+  mutate(
+    stage_label = format_stage(stage),
+    metric_label = factor(metric_label, levels = c("Occupancy", "Mean dwell time", "Assignment similarity")),
+    plot_delta = metric_plot_value(metric, delta),
+    state_label = factor(state_label, levels = paste("Archetype", sort(unique(assigned_archetype))))
+  )
+
+if (nrow(seeg_plot_df) > 0) {
+  seeg_plot <- ggplot(seeg_plot_df, aes(x = stage_label, y = plot_delta, color = state_label)) +
+    geom_hline(yintercept = 0, color = zero_color, linewidth = 0.45, linetype = "dashed") +
+    geom_line(aes(group = interaction(patient_id, state_label)), alpha = 0.16, linewidth = 0.28) +
+    geom_point(alpha = 0.28, size = 0.9) +
+    stat_summary(aes(group = state_label), fun = mean, geom = "line", linewidth = 1.05) +
+    stat_summary(aes(group = state_label), fun = mean, geom = "point", size = 2.0) +
+    facet_wrap(~metric_label, scales = "free_y", ncol = 1) +
+    scale_color_manual(values = state_palette[seq_along(levels(seeg_plot_df$state_label))]) +
+    labs(x = "Seizure stage", y = "Stage minus IDE-A baseline", color = "SEEG archetype") +
+    comparison_theme()
+} else {
+  seeg_plot <- placeholder_panel("No matched SEEG archetype comparison rows are available.")
+}
+
+yeo_heat_df <- yeo_delta_summary %>%
+  mutate(
+    stage_label = format_stage(stage),
+    network = factor(network, levels = rev(yeo17_network_order)),
+    state_label = factor(state_label, levels = paste("Archetype", sort(unique(assigned_archetype)))),
+    label_value = ifelse(is.finite(mean_delta) & rank(-abs(mean_delta), ties.method = "first") <= 16, sprintf("%+.2f", mean_delta), "")
+  )
+
+yeo_limit <- max(abs(yeo_heat_df$mean_delta), na.rm = TRUE)
+if (!is.finite(yeo_limit) || yeo_limit <= 0) {
+  yeo_limit <- 1
+}
+
+if (nrow(yeo_heat_df) > 0) {
+  yeo_plot <- ggplot(yeo_heat_df, aes(x = stage_label, y = network, fill = mean_delta)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    facet_wrap(~state_label, nrow = 1) +
+    scale_fill_gradient2(
+      low = low_color,
+      mid = mid_color,
+      high = high_color,
+      midpoint = 0,
+      limits = c(-yeo_limit, yeo_limit),
+      oob = scales::squish
+    ) +
+    labs(x = "Seizure stage", y = "Yeo17 network", fill = "Loading delta") +
+    comparison_theme() +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1))
+} else {
+  yeo_plot <- placeholder_panel("No matched Yeo17 loading comparison rows are available.")
+}
+
+relationship_heat_df <- relationship_delta_summary %>%
+  mutate(
+    stage_label = format_stage(stage),
+    assigned_archetype = factor(paste("A", assigned_archetype, sep = ""), levels = paste("A", sort(unique(assigned_archetype)), sep = "")),
+    microstate = factor(paste("M", microstate, sep = ""), levels = paste("M", sort(unique(microstate)), sep = "")),
+    delta_pp = mean_delta * 100
+  )
+
+relationship_limit <- max(abs(relationship_heat_df$delta_pp), na.rm = TRUE)
+if (!is.finite(relationship_limit) || relationship_limit <= 0) {
+  relationship_limit <- 1
+}
+
+if (nrow(relationship_heat_df) > 0) {
+  relationship_plot <- ggplot(relationship_heat_df, aes(x = microstate, y = assigned_archetype, fill = delta_pp)) +
+    geom_tile(color = "white", linewidth = 0.35) +
+    facet_wrap(~stage_label, nrow = 1) +
+    scale_fill_gradient2(
+      low = low_color,
+      mid = mid_color,
+      high = high_color,
+      midpoint = 0,
+      limits = c(-relationship_limit, relationship_limit),
+      oob = scales::squish
+    ) +
+    labs(x = "EEG microstate", y = "SEEG archetype", fill = "Delta (pp)") +
+    comparison_theme()
+} else {
+  relationship_plot <- placeholder_panel("No matched EEG-SEEG relationship comparison rows are available.")
+}
+
+combined_plot <- (
+  denominator_plot / (eeg_plot | seeg_plot) / yeo_plot / relationship_plot
+) +
+  plot_layout(heights = c(0.9, 1.45, 1.25, 1.05), guides = "collect") &
+  theme(legend.position = "bottom")
+combined_plot <- combined_plot + plot_annotation(tag_levels = "A")
+
+save_svg_panel(denominator_plot, "ide_a_vs_sz_cohort_qc.svg", width = 8.6, height = 4.8)
+save_svg_panel(eeg_plot, "ide_a_vs_sz_eeg_microstate_delta.svg", width = 8.4, height = 7.2)
+save_svg_panel(seeg_plot, "ide_a_vs_sz_seeg_archetype_delta.svg", width = 8.4, height = 7.2)
+save_svg_panel(yeo_plot, "ide_a_vs_sz_yeo17_loading_delta_heatmap.svg", width = 10.5, height = 6.2)
+save_svg_panel(relationship_plot, "ide_a_vs_sz_eeg_seeg_relationship_delta_heatmap.svg", width = 9.4, height = 4.8)
+save_svg_panel(combined_plot, "ide_a_vs_sz_combined_overview.svg", width = 13.2, height = 16.0)
+```
+
+```{r render-summary}
+tibble(
+  output = c(
+    "ide_a_vs_sz_cohort_qc.svg",
+    "ide_a_vs_sz_eeg_microstate_delta.svg",
+    "ide_a_vs_sz_seeg_archetype_delta.svg",
+    "ide_a_vs_sz_yeo17_loading_delta_heatmap.svg",
+    "ide_a_vs_sz_eeg_seeg_relationship_delta_heatmap.svg",
+    "ide_a_vs_sz_combined_overview.svg",
+    "ide_a_vs_sz_model_ready_long.csv",
+    "ide_a_vs_sz_patient_delta_long.csv",
+    "ide_a_vs_sz_group_delta_estimates.csv"
+  ),
+  path = file.path(output_dir, output)
+)
+```
