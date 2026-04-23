@@ -1,0 +1,298 @@
+---
+title: "Seizure Stage Microstate Archetype Trajectory"
+output: html_document
+params:
+  input_dir: "artifacts/manual/seizure_stage_trajectory"
+  output_dir: "artifacts/manual/seizure_stage_trajectory"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    stop("A non-empty path parameter is required.")
+  }
+  is_absolute <- grepl("^[A-Za-z]:[/\\\\]|^/", path)
+  candidates <- if (is_absolute) c(path) else c(path, file.path("..", path))
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve path:", path))
+  }
+  normalizePath(candidates[[length(candidates)]], winslash = "/", mustWork = FALSE)
+}
+
+for (pkg in c("svglite", "ggtext", "paletteer", "patchwork")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(paste0("Missing required package '", pkg, "'. Install it with: install.packages('", pkg, "')"))
+  }
+}
+
+library(ggtext)
+library(paletteer)
+library(patchwork)
+
+input_dir <- resolve_repo_path(params$input_dir, must_exist = TRUE)
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+
+stage_levels <- c("pre", "LVFA", "SZ", "post")
+stage_labels <- c(pre = "Preictal", LVFA = "LVFA", SZ = "Ictal", post = "Postictal")
+
+read_required_csv <- function(file_name, required_cols) {
+  path <- file.path(input_dir, file_name)
+  if (!file.exists(path)) {
+    stop(paste("Missing required seizure-stage input:", path))
+  }
+  df <- read.csv(path, stringsAsFactors = FALSE)
+  missing <- setdiff(required_cols, names(df))
+  if (length(missing) > 0) {
+    stop(paste(file_name, "is missing required columns:", paste(missing, collapse = ", ")))
+  }
+  df
+}
+
+read_optional_csv <- function(file_name, required_cols = character()) {
+  path <- file.path(input_dir, file_name)
+  if (!file.exists(path)) {
+    return(NULL)
+  }
+  df <- read.csv(path, stringsAsFactors = FALSE)
+  missing <- setdiff(required_cols, names(df))
+  if (length(missing) > 0) {
+    stop(paste(file_name, "is missing required columns:", paste(missing, collapse = ", ")))
+  }
+  df
+}
+
+prepare_stage <- function(df) {
+  df %>%
+    mutate(
+      stage = factor(stage, levels = stage_levels, labels = stage_labels),
+      stage_raw = as.character(stage)
+    )
+}
+
+bg_fill <- "#FBF7F1"
+panel_fill <- "#FFFDF8"
+grid_color <- "#E4DCCF"
+ink_color <- "#1F2A33"
+muted_color <- "#5B6670"
+
+stage_theme <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      strip.background = element_rect(fill = "#EFE6D8", color = NA),
+      strip.text = ggtext::element_markdown(face = "bold", color = ink_color),
+      axis.title = element_text(face = "bold", color = ink_color),
+      axis.text = element_text(color = ink_color),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = grid_color, linewidth = 0.34),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      plot.margin = margin(8, 10, 8, 8)
+    )
+}
+
+placeholder_panel <- function(label) {
+  ggplot() +
+    annotate("text", x = 0, y = 0, label = label, color = muted_color, size = 3.5, lineheight = 1.1) +
+    xlim(-1, 1) +
+    ylim(-1, 1) +
+    labs(x = NULL, y = NULL) +
+    stage_theme() +
+    theme(
+      axis.text = element_blank(),
+      panel.grid = element_blank()
+    )
+}
+
+metric_palette <- c(
+  seeg_stage = "#235789",
+  paired_eeg_seeg = "#C1292E",
+  eeg_microstate = "#4C956C"
+)
+
+state_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))
+
+save_svg_panel <- function(plot_obj, file_name, width = 8, height = 5) {
+  save_panel(plot_obj, file.path(output_dir, file_name), width = width, height = height, dpi = 320)
+}
+
+segments <- read_required_csv(
+  "segments.csv",
+  c("patient_id", "recording_state", "seizure_type", "stage", "stage_order", "usable_segment", "qc_reason")
+) %>%
+  prepare_stage()
+
+recording_index <- read_required_csv(
+  "recording_index.csv",
+  c("patient_id", "recording_state", "eligible_seeg_stage", "eligible_paired_eeg_seeg", "missing_assets")
+)
+
+denominators <- read_required_csv(
+  "denominators.csv",
+  c("metric_family", "stage", "stage_order", "n_patients", "n_recordings", "n_usable_segments")
+) %>%
+  prepare_stage() %>%
+  mutate(
+    metric_family = factor(metric_family, levels = c("seeg_stage", "paired_eeg_seeg", "eeg_microstate"))
+  )
+
+patient_eeg <- read_optional_csv(
+  "patient_eeg_metrics.csv",
+  c("patient_id", "stage", "stage_order", "microstate", "occupancy", "mean_dwell_sec", "occurrence_per_min")
+)
+patient_seeg <- read_optional_csv(
+  "patient_seeg_metrics.csv",
+  c("patient_id", "stage", "stage_order", "assigned_archetype", "occupancy", "mean_dwell_sec", "occurrence_per_min")
+)
+loading_metrics <- read_optional_csv(
+  "seeg_yeo_loading_metrics.csv",
+  c("stage", "stage_order", "assigned_archetype", "network", "occupancy", "loading_value", "weighted_loading")
+)
+relationship_metrics <- read_optional_csv(
+  "relationship_metrics.csv",
+  c("stage", "stage_order", "field_state", "microstate", "p_microstate_given_field")
+)
+```
+
+```{r build-plots}
+denominator_plot <- denominators %>%
+  ggplot(aes(x = stage, y = n_usable_segments, fill = metric_family)) +
+  geom_col(position = position_dodge(width = 0.72), width = 0.64, color = "white", linewidth = 0.25) +
+  geom_text(
+    aes(label = n_patients),
+    position = position_dodge(width = 0.72),
+    vjust = -0.35,
+    size = 3,
+    color = ink_color
+  ) +
+  scale_fill_manual(values = metric_palette, labels = c("SEEG", "Paired EEG-SEEG", "EEG")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  labs(x = "Seizure stage", y = "Usable stage segments (n)", fill = "Cohort") +
+  stage_theme()
+
+timing_qc <- segments %>%
+  group_by(stage, stage_order, usable_segment) %>%
+  summarise(n_segments = n(), .groups = "drop") %>%
+  mutate(usable_segment = ifelse(usable_segment, "Usable", "Excluded"))
+
+timing_qc_plot <- ggplot(timing_qc, aes(x = stage, y = n_segments, fill = usable_segment)) +
+  geom_col(width = 0.68, color = "white", linewidth = 0.25) +
+  scale_fill_manual(values = c(Usable = "#4C956C", Excluded = "#C1292E")) +
+  labs(x = "Seizure stage", y = "Annotated segments (n)", fill = "Timing QC") +
+  stage_theme()
+
+if (!is.null(patient_eeg) && nrow(patient_eeg) > 0) {
+  patient_eeg <- patient_eeg %>%
+    prepare_stage() %>%
+    mutate(
+      microstate = factor(microstate),
+      occupancy_pct = occupancy * 100
+    )
+  eeg_plot <- ggplot(patient_eeg, aes(x = stage, y = occupancy_pct, color = microstate)) +
+    geom_line(aes(group = interaction(patient_id, microstate)), alpha = 0.22, linewidth = 0.35) +
+    geom_point(alpha = 0.35, size = 1.1) +
+    stat_summary(aes(group = microstate), fun = mean, geom = "line", linewidth = 1.1) +
+    stat_summary(aes(group = microstate), fun = mean, geom = "point", size = 2.2) +
+    scale_color_manual(values = state_palette) +
+    labs(x = "Seizure stage", y = "EEG microstate occupancy (%)", color = "Microstate") +
+    stage_theme()
+} else {
+  eeg_plot <- placeholder_panel("EEG microstate stage metrics are not available.\nRun run-seizure-stage-analysis, then export tables.")
+}
+
+if (!is.null(patient_seeg) && nrow(patient_seeg) > 0) {
+  patient_seeg <- patient_seeg %>%
+    prepare_stage() %>%
+    mutate(
+      assigned_archetype = factor(assigned_archetype),
+      occupancy_pct = occupancy * 100
+    )
+  seeg_plot <- ggplot(patient_seeg, aes(x = stage, y = occupancy_pct, color = assigned_archetype)) +
+    geom_line(aes(group = interaction(patient_id, assigned_archetype)), alpha = 0.22, linewidth = 0.35) +
+    geom_point(alpha = 0.35, size = 1.1) +
+    stat_summary(aes(group = assigned_archetype), fun = mean, geom = "line", linewidth = 1.1) +
+    stat_summary(aes(group = assigned_archetype), fun = mean, geom = "point", size = 2.2) +
+    scale_color_manual(values = state_palette) +
+    labs(x = "Seizure stage", y = "SEEG archetype occupancy (%)", color = "Archetype") +
+    stage_theme()
+} else {
+  seeg_plot <- placeholder_panel("SEEG archetype stage metrics are not available.\nRun run-seizure-stage-analysis, then export tables.")
+}
+
+if (!is.null(loading_metrics) && nrow(loading_metrics) > 0) {
+  loading_summary <- loading_metrics %>%
+    prepare_stage() %>%
+    group_by(stage, stage_order, network) %>%
+    summarise(mean_weighted_loading = mean(weighted_loading, na.rm = TRUE), .groups = "drop")
+  loading_plot <- ggplot(loading_summary, aes(x = stage, y = network, fill = mean_weighted_loading)) +
+    geom_tile(color = "white", linewidth = 0.25) +
+    scale_fill_gradient2(low = "#2166AC", mid = "#FFFDF8", high = "#B2182B", midpoint = 0) +
+    labs(x = "Seizure stage", y = "Yeo17 network", fill = "Weighted loading") +
+    stage_theme()
+} else {
+  loading_plot <- placeholder_panel("Yeo17 loading metrics are not available.\nRun run-seizure-stage-analysis, then export tables.")
+}
+
+if (!is.null(relationship_metrics) && nrow(relationship_metrics) > 0) {
+  relationship_summary <- relationship_metrics %>%
+    prepare_stage() %>%
+    group_by(stage, stage_order, field_state, microstate) %>%
+    summarise(preference = mean(p_microstate_given_field, na.rm = TRUE), .groups = "drop") %>%
+    mutate(
+      field_state = factor(field_state),
+      microstate = factor(microstate)
+    )
+  relationship_plot <- ggplot(relationship_summary, aes(x = microstate, y = field_state, fill = preference)) +
+    geom_tile(color = "white", linewidth = 0.25) +
+    facet_wrap(~stage, nrow = 1) +
+    scale_fill_gradient(low = "#F4E8D0", high = "#235789", limits = c(0, NA)) +
+    labs(x = "EEG microstate", y = "SEEG archetype", fill = "P(microstate | archetype)") +
+    stage_theme()
+} else {
+  relationship_plot <- placeholder_panel("Paired EEG-SEEG relationship metrics are not available.\nRun run-seizure-stage-analysis, then export tables.")
+}
+
+combined_plot <- (
+  denominator_plot + timing_qc_plot
+) / (
+  eeg_plot + seeg_plot
+) / (
+  loading_plot + relationship_plot
+) +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.background = element_rect(fill = bg_fill, color = NA))
+
+save_svg_panel(denominator_plot, "seizure_stage_denominators.svg", width = 7.2, height = 4.6)
+save_svg_panel(timing_qc_plot, "seizure_stage_timing_qc.svg", width = 7.2, height = 4.6)
+save_svg_panel(eeg_plot, "seizure_stage_eeg_microstate_trajectory.svg", width = 7.8, height = 4.8)
+save_svg_panel(seeg_plot, "seizure_stage_seeg_archetype_trajectory.svg", width = 7.8, height = 4.8)
+save_svg_panel(loading_plot, "seizure_stage_yeo_loading_heatmap.svg", width = 8.8, height = 5.2)
+save_svg_panel(relationship_plot, "seizure_stage_eeg_seeg_relationship_heatmap.svg", width = 8.8, height = 5.2)
+save_svg_panel(combined_plot, "seizure_stage_combined_overview.svg", width = 13, height = 14)
+```
+
+```{r outputs}
+output_files <- c(
+  "seizure_stage_denominators.svg",
+  "seizure_stage_timing_qc.svg",
+  "seizure_stage_eeg_microstate_trajectory.svg",
+  "seizure_stage_seeg_archetype_trajectory.svg",
+  "seizure_stage_yeo_loading_heatmap.svg",
+  "seizure_stage_eeg_seeg_relationship_heatmap.svg",
+  "seizure_stage_combined_overview.svg"
+)
+data.frame(
+  output = output_files,
+  path = file.path(output_dir, output_files)
+)
+```

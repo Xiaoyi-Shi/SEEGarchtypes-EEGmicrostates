@@ -201,6 +201,30 @@ Rscript -e "rmarkdown::render('scripts/06_eeg_microstate_overview.Rmd', params=l
 
 The document writes one combined overview `SVG` plus separate `SVG` panels for EEG microstate topographies, parameter distributions, within-participant coverage composition, the EEG microstate transition matrix, and a representative 19-channel EEG waveform with GFP peak markers. Its visual style matches the SEEG archetype statistics and relationship figures.
 
+## Seizure Stage Trajectory R Markdown
+
+Use `scripts/07_seizure_stage_microstate_archetype_trajectory.Rmd` after generating seizure-stage tables with the new CLI workflow.
+
+Example:
+
+```powershell
+uv run seeg-eegmicrostates build-seizure-stage-index --seeg-parcellation-name yeo17 --run-id seizure_stage_smoke
+uv run seeg-eegmicrostates export-seizure-stage-tables --seeg-parcellation-name yeo17 --run-id seizure_stage_smoke
+Rscript -e "rmarkdown::render('scripts/07_seizure_stage_microstate_archetype_trajectory.Rmd', params=list(input_dir='artifacts/manual/seizure_stage_trajectory', output_dir='artifacts/manual/seizure_stage_trajectory'))"
+```
+
+When full seizure-stage metrics are available from `run-seizure-stage-analysis`, the document renders EEG microstate trajectories, SEEG archetype trajectories, Yeo17 loading heatmaps, and EEG-SEEG relationship heatmaps. If only index/QC tables exist, it still renders denominator and timing-QC panels and uses explicit placeholder panels for metrics that require the heavier projection step.
+
+The document writes:
+
+- one combined seizure-stage overview `SVG`
+- one cohort-denominator `SVG`
+- one timing-QC `SVG`
+- one EEG microstate occupancy trajectory `SVG`
+- one SEEG archetype occupancy trajectory `SVG`
+- one Yeo17 weighted-loading heatmap `SVG`
+- one paired EEG-SEEG relationship heatmap `SVG`
+
 ## Maintained Supplementary Figure Inputs
 
 `scripts/02_supplementary_figures.Rmd` expects retained supplementary tables such as:

@@ -35,6 +35,12 @@ def build_index_artifacts(*args, **kwargs):
     return _core.build_index_artifacts(*args, **kwargs)
 
 
+def build_seizure_stage_index_artifacts(*args, **kwargs):
+    from . import seizure as _seizure
+
+    return _seizure.build_seizure_stage_index_artifacts(*args, **kwargs)
+
+
 def run_eeg_microstate_branch(*args, **kwargs):
     _sync_core_hooks()
     return _core.run_eeg_microstate_branch(*args, **kwargs)
@@ -81,3 +87,15 @@ def run_exploratory_coupling_stage(*args, **kwargs):
 
 def export_paper_tables(*args, **kwargs):
     return _export.export_paper_tables(*args, **kwargs)
+
+
+def run_seizure_stage_analysis(*args, **kwargs):
+    from . import seizure as _seizure
+
+    return _seizure.run_seizure_stage_analysis(*args, **kwargs)
+
+
+def export_seizure_stage_tables(*args, **kwargs):
+    from . import seizure as _seizure
+
+    return _seizure.export_seizure_stage_tables(*args, **kwargs)

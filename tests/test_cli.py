@@ -15,10 +15,13 @@ def test_cli_exposes_paper_focused_commands() -> None:
     commands = set(action.choices)
     assert commands == {
         "build-index",
+        "build-seizure-stage-index",
         "run-eeg-states",
         "run-seeg-regions",
         "run-exploratory-coupling",
+        "run-seizure-stage-analysis",
         "export-paper-tables",
+        "export-seizure-stage-tables",
     }
 
 
@@ -47,6 +50,9 @@ def test_cli_describes_retained_outputs() -> None:
     eeg_help = action.choices["run-eeg-states"].format_help()
     exploratory_help = action.choices["run-exploratory-coupling"].format_help()
     export_help = action.choices["export-paper-tables"].format_help()
+    seizure_index_help = action.choices["build-seizure-stage-index"].format_help()
+    seizure_analysis_help = action.choices["run-seizure-stage-analysis"].format_help()
+    seizure_export_help = action.choices["export-seizure-stage-tables"].format_help()
     assert "AAL3" in top_level_help
     assert "ModK.fif" in eeg_help
     assert "configured default" in eeg_help
@@ -66,6 +72,11 @@ def test_cli_describes_retained_outputs() -> None:
     assert "field-state-to-eeg-switching" in exploratory_help
     assert "gfp-controlled-field-state-to-eeg-switching" in exploratory_help
     assert "categorized manuscript tables" in export_help
+    assert "SZ*_<type>" in seizure_index_help
+    assert "SEEG-only" in seizure_index_help
+    assert "fixed IDE_A" in seizure_analysis_help
+    assert "--analysis-state" not in seizure_analysis_help
+    assert "R Markdown" in seizure_export_help
     assert "run-activity-effects" not in top_level_help
     assert "run-connectivity-effects" not in top_level_help
     assert "lagged-gfp-global-coupling" not in exploratory_help

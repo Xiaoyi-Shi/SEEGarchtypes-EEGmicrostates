@@ -29,9 +29,12 @@ from seeg_eegmicrostates.coupling import (
 )
 from seeg_eegmicrostates.workflows import (
     build_index_artifacts,
+    build_seizure_stage_index_artifacts,
+    export_seizure_stage_tables,
     export_paper_tables,
     run_eeg_states_stage,
     run_exploratory_coupling_stage,
+    run_seizure_stage_analysis,
     run_seeg_regions_stage,
 )
 
@@ -178,6 +181,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export categorized manuscript tables and manifests from staged analysis outputs.",
         description="Export categorized manuscript tables and manifests from staged analysis outputs without rendering figures in Python.",
     )
+    seizure_index_parser = subparsers.add_parser(
+        "build-seizure-stage-index",
+        parents=[parcellation_parent],
+        help="Build SZ recording and pre/LVFA/SZ/post stage indexes from workbook annotations.",
+        description=(
+            "Build a seizure-stage index from workbook-derived SZ*_<type> recordings without using --analysis-state. "
+            "Outputs include stage timing QC plus SEEG-only and paired EEG-SEEG eligibility."
+        ),
+    )
+    seizure_index_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional shared run directory name for seizure-stage logs and reports.",
+    )
+    seizure_analysis_parser = subparsers.add_parser(
+        "run-seizure-stage-analysis",
+        parents=[parcellation_parent],
+        help="Project seizure-stage data into fixed IDE_A EEG microstate and SEEG archetype references.",
+        description=(
+            "Run the optional seizure-stage trajectory workflow for workbook-derived SZ*_<type> recordings. "
+            "This does not replace the IDE_A paper-core workflow and requires fixed IDE_A reference artifacts."
+        ),
+    )
+    seizure_analysis_parser.add_argument(
+        "--template-fif",
+        help="Use an external EEG microstate template file for seizure-stage EEG projection.",
+    )
+    seizure_analysis_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional shared run directory name for seizure-stage logs and reports.",
+    )
+    seizure_export_parser = subparsers.add_parser(
+        "export-seizure-stage-tables",
+        parents=[parcellation_parent],
+        help="Export seizure-stage trajectory tables and manifests for R Markdown rendering.",
+        description=(
+            "Export seizure-stage R-ready tables from generated caches for R Markdown rendering. "
+            "SEEG-only tables can be exported even when paired EEG-SEEG outputs are unavailable."
+        ),
+    )
+    seizure_export_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional shared run directory name for seizure-stage logs and reports.",
+    )
     return parser
 
 
@@ -223,11 +272,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     cfg_kwargs = {
-        "analysis_state": args.analysis_state,
+        "analysis_state": getattr(args, "analysis_state", DEFAULT_ANALYSIS_STATE),
         "seeg_parcellation_name": args.seeg_parcellation_name,
         "seeg_parcellation_column": args.seeg_parcellation_column,
     }
-    if args.run_id is not None:
+    if getattr(args, "run_id", None) is not None:
         cfg_kwargs["run_timestamp"] = args.run_id
     cfg = AnalysisConfig(**cfg_kwargs)
     started_at = datetime.now()
@@ -258,6 +307,12 @@ def main(argv: list[str] | None = None) -> None:
             )
         elif args.command == "export-paper-tables":
             outputs = export_paper_tables(cfg)
+        elif args.command == "build-seizure-stage-index":
+            outputs = build_seizure_stage_index_artifacts(cfg)
+        elif args.command == "run-seizure-stage-analysis":
+            outputs = run_seizure_stage_analysis(cfg, template_fif=args.template_fif)
+        elif args.command == "export-seizure-stage-tables":
+            outputs = export_seizure_stage_tables(cfg)
         else:
             raise ValueError(f"Unsupported command: {args.command}")
     except Exception:
