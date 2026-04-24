@@ -17,6 +17,27 @@ paper_theme <- function() {
     )
 }
 
+archetype_label_map <- c(
+  "0" = "A0 SM-SV",
+  "1" = "A1 LB-SV",
+  "2" = "A2 LB-DA",
+  "3" = "A3 CT-DA"
+)
+
+archetype_label <- function(x) {
+  keys <- as.character(x)
+  labels <- unname(archetype_label_map[keys])
+  fallback <- paste0("A", keys)
+  ifelse(is.na(labels) | !nzchar(labels), fallback, labels)
+}
+
+format_archetype_label <- function(x, levels = NULL) {
+  if (is.null(levels)) {
+    levels <- sort(unique(as.character(x)))
+  }
+  factor(archetype_label(x), levels = archetype_label(levels))
+}
+
 resolve_manifest <- function(report_root = NULL, manifest_path = NULL) {
   resolve_candidate <- function(path) {
     if (file.exists(path)) {
@@ -144,7 +165,9 @@ plot_state_heatmap <- function(df, x, y, fill, title, midpoint = 0) {
 }
 
 plot_support_summary <- function(df, title, value_col = "mean_similarity") {
-  ggplot(df, aes(x = factor(archetype), y = .data[[value_col]])) +
+  plot_df <- df %>%
+    mutate(archetype_label = format_archetype_label(archetype))
+  ggplot(plot_df, aes(x = archetype_label, y = .data[[value_col]])) +
     geom_col(fill = "#2c7fb8", width = 0.7) +
     geom_text(aes(label = n_subjects), vjust = -0.4, size = 3) +
     labs(title = title, x = "Archetype", y = value_col, subtitle = "Labels above bars show supporting subjects") +
@@ -161,8 +184,9 @@ plot_channel_heatmap <- function(df, title) {
   )
   long_df <- df %>%
     select(assigned_archetype, all_of(channel_cols)) %>%
-    pivot_longer(cols = all_of(channel_cols), names_to = "channel", values_to = "value")
-  plot_state_heatmap(long_df, "channel", "assigned_archetype", "value", title = title, midpoint = 0) +
+    pivot_longer(cols = all_of(channel_cols), names_to = "channel", values_to = "value") %>%
+    mutate(archetype_label = format_archetype_label(assigned_archetype))
+  plot_state_heatmap(long_df, "channel", "archetype_label", "value", title = title, midpoint = 0) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }
 
@@ -179,8 +203,9 @@ plot_archetype_loadings <- function(df, title) {
   long_df <- df %>%
     group_by(archetype) %>%
     summarise(across(all_of(network_cols), ~mean(.x, na.rm = TRUE)), .groups = "drop") %>%
-    pivot_longer(cols = all_of(network_cols), names_to = "network", values_to = "loading")
-  plot_state_heatmap(long_df, "network", "archetype", "loading", title = title, midpoint = 0) +
+    pivot_longer(cols = all_of(network_cols), names_to = "network", values_to = "loading") %>%
+    mutate(archetype_label = format_archetype_label(archetype))
+  plot_state_heatmap(long_df, "network", "archetype_label", "loading", title = title, midpoint = 0) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }
 

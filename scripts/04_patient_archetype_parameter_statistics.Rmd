@@ -67,7 +67,7 @@ raw_df <- raw_df %>%
   mutate(
     patient_id = as.character(patient_id),
     archetype = factor(archetype, levels = sort(unique(archetype))),
-    archetype_label = factor(paste("Archetype", archetype), levels = paste("Archetype", levels(archetype))),
+    archetype_label = format_archetype_label(archetype, levels(archetype)),
     occupancy_pct = occupancy * 100
   )
 

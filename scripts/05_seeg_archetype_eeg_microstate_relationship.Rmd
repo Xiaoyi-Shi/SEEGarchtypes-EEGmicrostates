@@ -133,7 +133,7 @@ archetype_levels <- sort(unique(c(template_similarity$assigned_archetype, state_
 microstate_levels <- sort(unique(c(template_similarity$microstate, state_preference$microstate)))
 
 format_archetype <- function(x) {
-  factor(paste("Archetype", x), levels = paste("Archetype", archetype_levels))
+  format_archetype_label(x, archetype_levels)
 }
 
 format_microstate <- function(x) {
@@ -215,7 +215,7 @@ relationship_summary <- best_template_match %>%
   left_join(best_state_preference, by = "archetype_label")
 
 archetype_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))[c(1, 2, 3, 4)]
-names(archetype_palette) <- paste("Archetype", archetype_levels)
+names(archetype_palette) <- archetype_label(archetype_levels)
 
 bg_fill <- "#FBF7F1"
 panel_fill <- "#FFFDF8"

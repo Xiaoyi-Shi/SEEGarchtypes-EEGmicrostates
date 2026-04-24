@@ -29,6 +29,13 @@ Both R Markdown documents read `reports/manifests/paper_report_manifest.csv` or 
 
 The Python package no longer owns manuscript figure rendering or other special paper-support utilities.
 
+Archetype labels in the current figure scripts use a fixed shorthand:
+
+- `A0 SM-SV`
+- `A1 LB-SV`
+- `A2 LB-DA`
+- `A3 CT-DA`
+
 ## Peak Segment Export Tool
 
 Use `scripts/export_seeg_peak_segment.py` when you want a one-off inspection bundle for a specific bipolar SEEG time range. The script reads a cropped FIF segment, computes the retained SEEG field peak trace, marks detected peaks, and writes:
@@ -139,7 +146,7 @@ The document writes:
 - a long-format parameter `CSV`
 - one combined main-panel `SVG`
 - one compositional occupancy `SVG` with one 100% stacked bar per patient
-- one paired dwell-time estimation `SVG` with bootstrap confidence intervals versus `Archetype 0`
+- one paired dwell-time estimation `SVG` with bootstrap confidence intervals versus `A0 SM-SV`
 - one ranked assignment-similarity `SVG`
 - one patient-by-archetype parameter heatmap `SVG`
 - one `archetype x Yeo17 network` signed loading heatmap `SVG`
@@ -213,17 +220,21 @@ uv run seeg-eegmicrostates export-seizure-stage-tables --seeg-parcellation-name 
 Rscript -e "rmarkdown::render('scripts/07_seizure_stage_microstate_archetype_trajectory.Rmd', params=list(input_dir='artifacts/manual/seizure_stage_trajectory', output_dir='artifacts/manual/seizure_stage_trajectory'))"
 ```
 
-When full seizure-stage metrics are available from `run-seizure-stage-analysis`, the document renders EEG microstate trajectories, SEEG archetype trajectories, Yeo17 loading heatmaps, and EEG-SEEG relationship heatmaps. If only index/QC tables exist, it still renders denominator and timing-QC panels and uses explicit placeholder panels for metrics that require the heavier projection step.
+This document is now the **stage-only descriptive report**. It describes `pre`, `LVFA`, `SZ`, and `post` without referencing the IDE-A baseline. Its job is to show data support, stage duration imbalance, timing/processing QC, patient-first stage trajectories, projection confidence, and descriptive Yeo17 / EEG-SEEG heatmaps.
 
 The document writes:
 
-- one combined seizure-stage overview `SVG`
-- one cohort-denominator `SVG`
-- one timing-QC `SVG`
-- one EEG microstate occupancy trajectory `SVG`
-- one SEEG archetype occupancy trajectory `SVG`
-- one Yeo17 weighted-loading heatmap `SVG`
-- one paired EEG-SEEG relationship heatmap `SVG`
+- one stage-only combined overview `SVG`
+- one descriptive QC overview `SVG`
+- one stage-duration imbalance `SVG`
+- one projection-confidence `SVG`
+- one EEG microstate core-trajectory `SVG`
+- one SEEG archetype core-trajectory `SVG`
+- one descriptive Yeo17 heatmap `SVG`
+- one descriptive EEG-SEEG relationship heatmap `SVG`
+- stage-duration, timing-QC, processing-QC, confidence, and audit `CSV` tables
+
+Backward-compatible aliases such as `seizure_stage_combined_overview.svg` and `seizure_stage_yeo_loading_heatmap.svg` are still written so older notes do not break.
 
 ## IDE-A versus Seizure Stage Comparison R Markdown
 
@@ -235,19 +246,26 @@ Example:
 Rscript -e "rmarkdown::render('scripts/08_ide_a_vs_seizure_stage_comparison.Rmd', params=list(ide_runtime_hash='97411c0ec4', seizure_dir='artifacts/manual/seizure_stage_trajectory', output_dir='artifacts/manual/ide_a_vs_seizure_stage_comparison'))"
 ```
 
+This document is the **clinical extension / IDE-A baseline comparison report**. It treats IDE-A as the patient-level baseline, keeps seizure stages in the fixed IDE-A-derived state space, computes matched patient deltas, prioritizes occupancy and dwell-time as primary metrics, and keeps Yeo17 / EEG-SEEG relationship panels as secondary or tertiary outputs.
+
 The document reads the seizure-stage CSV exports plus IDE-A baseline artifacts. SEEG archetype and Yeo17 baselines come from `artifacts/manual/patient_archetype_tables/patient_archetype_yeo17_summary_<hash>.csv`; EEG microstate baselines and patient-level EEG-SEEG relationship baselines can be derived from existing Parquet caches through `uv run python`, so the R workflow does not require the R `arrow` package.
 
 The document writes:
 
-- one cohort/QC denominator `SVG`
-- one EEG microstate stage-minus-IDE-A delta `SVG`
-- one SEEG archetype stage-minus-IDE-A delta `SVG`
-- one Yeo17 signed loading-delta heatmap `SVG`
+- one analysis-flow `SVG`
+- one flow/QC `SVG`
+- one stage-duration QC `SVG`
+- one projection-confidence QC `SVG`
+- one primary stage-minus-IDE-A trajectory `SVG`
+- one primary paired effect-size / forest `SVG`
+- one Yeo17 signed-delta heatmap `SVG`
 - one EEG-SEEG relationship signed-delta heatmap `SVG`
-- one combined overview `SVG`
-- patient-level baseline, stage, delta, group-estimate, denominator/QC, and model-ready long `CSV` tables
+- one seizure-type-stratified forest `SVG`
+- one repeated-seizure sensitivity `SVG`
+- one Figure 7 overview `SVG`
+- denominator/QC, complete-case support, primary delta, support delta, Yeo17 delta, relationship delta, seizure-type, sensitivity, and model-ready long `CSV` tables
 
-Primary plots use patient-level matched deltas, while `ide_a_vs_sz_model_ready_long.csv` preserves seizure-level traceability and `seizure_type` labels for later mixed-effects modeling.
+Primary plots use patient-level matched deltas, while `ide_a_vs_sz_model_ready_long.csv` preserves seizure-level traceability and `seizure_type` labels for later mixed-effects modeling. Interpretation remains observational: the report describes stage deviations from IDE-A, not a causal seizure-propagation model.
 
 ## Maintained Supplementary Figure Inputs
 

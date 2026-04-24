@@ -131,7 +131,7 @@ summary_long <- raw_df %>%
   dplyr::mutate(
     network = factor(network, levels = yeo17_network_order),
     archetype = factor(archetype, levels = sort(unique(archetype))),
-    archetype_label = paste("Archetype", archetype)
+    archetype_label = format_archetype_label(archetype, sort(unique(archetype)))
   )
 
 summary_wide <- summary_long %>%
