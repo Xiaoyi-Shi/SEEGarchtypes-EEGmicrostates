@@ -1,0 +1,626 @@
+---
+title: "Main-Text Validation Figures"
+output: html_document
+params:
+  input_dir: "artifacts/manual/maintext_validation"
+  runtime_hash: "97411c0ec4"
+  output_dir: "artifacts/manual/maintext_validation"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("_common.R")
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    stop("A non-empty path parameter is required.")
+  }
+  is_absolute <- grepl("^[A-Za-z]:[/\\\\]|^/", path)
+  candidates <- if (is_absolute) c(path) else c(path, file.path("..", path))
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve path:", path))
+  }
+  candidate <- candidates[[length(candidates)]]
+  normalizePath(candidate, winslash = "/", mustWork = FALSE)
+}
+
+for (pkg in c("svglite", "ggdist", "ggtext", "paletteer", "patchwork")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(paste0("Missing required package '", pkg, "'. Install it with: install.packages('", pkg, "')"))
+  }
+}
+
+library(ggdist)
+library(ggtext)
+library(paletteer)
+library(patchwork)
+
+input_dir <- resolve_repo_path(params$input_dir, must_exist = TRUE)
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+runtime_hash <- params$runtime_hash
+output_stem <- paste0("maintext_validation_", runtime_hash)
+
+required_paths <- list(
+  yeo17_summary = file.path(input_dir, paste0(output_stem, "_yeo17_coverage_summary.csv")),
+  yeo17_long = file.path(input_dir, paste0(output_stem, "_yeo17_coverage_long.csv")),
+  transition_group = file.path(input_dir, paste0(output_stem, "_field_state_transition_group.csv")),
+  model_order_subject = file.path(input_dir, paste0(output_stem, "_field_state_model_order_subject.csv")),
+  model_order_group = file.path(input_dir, paste0(output_stem, "_field_state_model_order_group.csv")),
+  support_summary = file.path(input_dir, paste0(output_stem, "_archetype_support_summary.csv")),
+  assignment_null_long = file.path(input_dir, paste0(output_stem, "_assignment_similarity_null_long.csv")),
+  assignment_null_summary = file.path(input_dir, paste0(output_stem, "_assignment_similarity_null_summary.csv")),
+  lag_curve = file.path(input_dir, paste0(output_stem, "_archetype_eeg_fine_lag_curve.csv")),
+  subject_peaks = file.path(input_dir, paste0(output_stem, "_archetype_eeg_subject_peaks.csv")),
+  topomap_values = file.path(input_dir, paste0(output_stem, "_conditioned_eeg_topomap_values.csv")),
+  topomap_grid = file.path(input_dir, paste0(output_stem, "_conditioned_eeg_topomap_grid.csv")),
+  representative_subjects = file.path(input_dir, paste0(output_stem, "_conditioned_eeg_representative_subjects.csv"))
+)
+
+missing_paths <- names(required_paths)[!file.exists(unlist(required_paths))]
+if (length(missing_paths) > 0) {
+  stop(paste(
+    "Missing validation inputs:",
+    paste(missing_paths, collapse = ", "),
+    "Run scripts/export_maintext_validation_inputs.py first."
+  ))
+}
+
+yeo17_summary <- read.csv(required_paths$yeo17_summary, stringsAsFactors = FALSE)
+yeo17_long <- read.csv(required_paths$yeo17_long, stringsAsFactors = FALSE)
+transition_group <- read.csv(required_paths$transition_group, stringsAsFactors = FALSE)
+model_order_subject <- read.csv(required_paths$model_order_subject, stringsAsFactors = FALSE)
+model_order_group <- read.csv(required_paths$model_order_group, stringsAsFactors = FALSE)
+support_summary <- read.csv(required_paths$support_summary, stringsAsFactors = FALSE)
+assignment_null_long <- read.csv(required_paths$assignment_null_long, stringsAsFactors = FALSE)
+assignment_null_summary <- read.csv(required_paths$assignment_null_summary, stringsAsFactors = FALSE)
+lag_curve <- read.csv(required_paths$lag_curve, stringsAsFactors = FALSE)
+subject_peaks <- read.csv(required_paths$subject_peaks, stringsAsFactors = FALSE)
+topomap_values <- read.csv(required_paths$topomap_values, stringsAsFactors = FALSE)
+topomap_grid <- read.csv(required_paths$topomap_grid, stringsAsFactors = FALSE)
+representative_subjects <- read.csv(required_paths$representative_subjects, stringsAsFactors = FALSE)
+
+archetype_levels <- c("A0 SM-SV", "A1 LB-SV", "A2 LB-DA", "A3 CT-DA")
+yeo17_levels <- c(
+  "VisCent", "VisPeri", "SomMotA", "SomMotB", "DorsAttnA", "DorsAttnB",
+  "SalVentAttnA", "SalVentAttnB", "LimbicA", "LimbicB", "ContA", "ContB",
+  "ContC", "DefaultA", "DefaultB", "DefaultC", "TempPar"
+)
+
+patient_levels <- yeo17_summary %>%
+  arrange(desc(retained_bipolar_channels), patient_alias) %>%
+  pull(patient_alias)
+
+yeo17_summary <- yeo17_summary %>%
+  mutate(
+    patient_alias = factor(patient_alias, levels = rev(patient_levels)),
+    retained_label = paste0(retained_bipolar_channels, " ch"),
+    network_label = paste0(covered_yeo17_networks, "/17")
+  )
+
+yeo17_long <- yeo17_long %>%
+  filter(network %in% yeo17_levels) %>%
+  mutate(
+    patient_alias = factor(patient_alias, levels = levels(yeo17_summary$patient_alias)),
+    network = factor(network, levels = yeo17_levels),
+    count_label = ifelse(n_bipolar_channels > 0, as.character(n_bipolar_channels), "")
+  )
+
+transition_group <- transition_group %>%
+  mutate(
+    from_label = factor(archetype_label(from_state), levels = rev(archetype_levels)),
+    to_label = factor(archetype_label(to_state), levels = archetype_levels),
+    transition_pct = mean_transition_probability * 100,
+    transition_label = sprintf("%.1f%%", transition_pct)
+  )
+
+model_order_subject_long <- bind_rows(
+  model_order_subject %>%
+    transmute(patient_id, n_states, metric_label = "Template fit", value = mean_template_fit),
+  model_order_subject %>%
+    filter(!is.na(fit_gain_from_prev_k)) %>%
+    transmute(patient_id, n_states, metric_label = "Gain from previous K", value = fit_gain_from_prev_k),
+  model_order_subject %>%
+    transmute(patient_id, n_states, metric_label = "Split-half stability", value = split_half_stability)
+)
+
+model_order_group_long <- bind_rows(
+  model_order_group %>%
+    transmute(n_states, retained_main_text_default, metric_label = "Template fit", value = mean_template_fit),
+  model_order_group %>%
+    filter(!is.na(mean_fit_gain_from_prev_k)) %>%
+    transmute(n_states, retained_main_text_default, metric_label = "Gain from previous K", value = mean_fit_gain_from_prev_k),
+  model_order_group %>%
+    transmute(n_states, retained_main_text_default, metric_label = "Split-half stability", value = mean_split_half_stability)
+)
+
+metric_levels <- c("Template fit", "Gain from previous K", "Split-half stability")
+model_order_subject_long <- model_order_subject_long %>%
+  mutate(metric_label = factor(metric_label, levels = metric_levels))
+model_order_group_long <- model_order_group_long %>%
+  mutate(metric_label = factor(metric_label, levels = metric_levels))
+
+support_summary <- support_summary %>%
+  mutate(
+    archetype_label = factor(archetype_label, levels = archetype_levels),
+    support_label = paste0(n_subjects, "/20"),
+    similarity_label = sprintf("mean %.3f", mean_similarity)
+  )
+
+assignment_null_long <- assignment_null_long %>%
+  mutate(
+    archetype_label = factor(archetype_label, levels = archetype_levels),
+    source = factor(source, levels = c("null", "observed"))
+  )
+
+assignment_null_summary <- assignment_null_summary %>%
+  mutate(
+    archetype_label = factor(archetype_label, levels = archetype_levels),
+    source = factor(source, levels = c("null", "observed"))
+  )
+
+lag_curve <- lag_curve %>%
+  arrange(lag_ms) %>%
+  mutate(
+    mean_effect_x1000 = mean_effect * 1000,
+    mean_observed_x1000 = mean_observed_coupling * 1000,
+    mean_null_x1000 = mean_null_mean_coupling * 1000,
+    q_flag = ifelse(q_fdr < 0.05, "FDR < 0.05", "n.s.")
+  )
+
+subject_peaks <- subject_peaks %>%
+  mutate(
+    patient_alias = factor(patient_alias, levels = sort(unique(patient_alias))),
+    peak_effect_x1000 = peak_effect_mean_diff * 1000,
+    peak_observed_x1000 = peak_observed_coupling * 1000,
+    peak_null_x1000 = peak_null_mean_coupling * 1000
+  )
+
+representative_subjects <- representative_subjects %>%
+  mutate(patient_alias = factor(patient_alias, levels = patient_alias))
+
+panel_order <- topomap_values %>%
+  distinct(patient_display, representative_rank) %>%
+  arrange(representative_rank, patient_display) %>%
+  pull(patient_display)
+
+topomap_values <- topomap_values %>%
+  mutate(
+    patient_display = factor(patient_display, levels = panel_order),
+    archetype_label = factor(archetype_label, levels = archetype_levels)
+  )
+
+topomap_grid <- topomap_grid %>%
+  mutate(
+    inside_head = as.logical(inside_head),
+    patient_display = factor(patient_display, levels = panel_order),
+    archetype_label = factor(archetype_label, levels = archetype_levels)
+  )
+
+group_topomap_values <- topomap_values %>% filter(patient_display == "Group")
+group_topomap_grid <- topomap_grid %>% filter(patient_display == "Group")
+representative_topomap_values <- topomap_values %>% filter(patient_display != "Group")
+representative_topomap_grid <- topomap_grid %>% filter(patient_display != "Group")
+
+bg_fill <- "#FBF7F1"
+panel_fill <- "#FFFDF8"
+grid_color <- "#E4DCCF"
+ink_color <- "#1F2A33"
+muted_color <- "#5B6670"
+warm_mid <- "#D49A51"
+warm_high <- "#7B2D26"
+cool_low <- "#2166AC"
+hot_high <- "#B2182B"
+highlight_fill <- "#E7CDA3"
+
+archetype_palette <- as.character(paletteer::paletteer_d("ggthemes::Tableau_10"))[c(1, 2, 3, 4)]
+names(archetype_palette) <- archetype_levels
+
+validation_theme <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      strip.background = element_rect(fill = "#EFE6D8", color = NA),
+      strip.text = ggtext::element_markdown(face = "bold", color = ink_color, lineheight = 1.05),
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
+      axis.title = element_text(face = "bold", color = ink_color),
+      axis.text = element_text(color = ink_color),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = grid_color, linewidth = 0.34),
+      plot.margin = margin(10, 14, 10, 10),
+      panel.spacing = grid::unit(0.9, "lines"),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold", color = ink_color),
+      legend.text = element_text(color = ink_color),
+      plot.tag = element_text(face = "bold", size = rel(1.2), color = ink_color)
+    )
+}
+
+save_svg <- function(plot_obj, output_path, width = 8, height = 5) {
+  ggplot2::ggsave(
+    output_path,
+    plot = plot_obj,
+    width = width,
+    height = height,
+    device = svglite::svglite,
+    bg = bg_fill
+  )
+  output_path
+}
+
+head_outline <- tibble(
+  angle = seq(0, 2 * pi, length.out = 361),
+  x = cos(angle),
+  y = sin(angle)
+)
+nose_outline <- tibble(x = c(-0.09, 0, 0.09), y = c(0.98, 1.13, 0.98))
+left_ear <- tibble(
+  angle = seq(pi / 2, 3 * pi / 2, length.out = 80),
+  x = -1.02 + 0.08 * cos(angle),
+  y = 0.00 + 0.20 * sin(angle)
+)
+right_ear <- tibble(
+  angle = seq(-pi / 2, pi / 2, length.out = 80),
+  x = 1.02 + 0.08 * cos(angle),
+  y = 0.00 + 0.20 * sin(angle)
+)
+
+topomap_limit <- max(abs(topomap_grid$value), na.rm = TRUE)
+if (!is.finite(topomap_limit) || topomap_limit <= 0) {
+  topomap_limit <- 1
+}
+
+build_topomap_plot <- function(grid_df, value_df, facet_formula, strip_text_size = 10) {
+  ggplot() +
+    geom_raster(
+      data = filter(grid_df, inside_head),
+      aes(x = x, y = y, fill = value),
+      interpolate = TRUE
+    ) +
+    geom_contour(
+      data = filter(grid_df, inside_head),
+      aes(x = x, y = y, z = value),
+      bins = 7,
+      color = scales::alpha(ink_color, 0.30),
+      linewidth = 0.18
+    ) +
+    geom_path(data = head_outline, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+    geom_path(data = nose_outline, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+    geom_path(data = left_ear, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+    geom_path(data = right_ear, aes(x = x, y = y), color = ink_color, linewidth = 0.55) +
+    geom_point(
+      data = value_df,
+      aes(x = x, y = y),
+      size = 1.25,
+      color = ink_color,
+      fill = panel_fill,
+      shape = 21,
+      stroke = 0.33
+    ) +
+    facet_grid(facet_formula, switch = "y") +
+    coord_equal(xlim = c(-1.16, 1.16), ylim = c(-1.16, 1.16), clip = "off") +
+    scale_fill_gradient2(
+      low = cool_low,
+      mid = "#F7F3EA",
+      high = hot_high,
+      midpoint = 0,
+      limits = c(-topomap_limit, topomap_limit),
+      oob = scales::squish,
+      name = "Template\nloading"
+    ) +
+    labs(x = NULL, y = NULL) +
+    theme_void(base_size = 10.4) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      strip.background = element_rect(fill = "#EFE6D8", color = NA),
+      strip.text.x = ggtext::element_markdown(face = "bold", size = strip_text_size, color = ink_color),
+      strip.text.y.left = ggtext::element_markdown(face = "bold", size = strip_text_size, color = ink_color, angle = 0),
+      strip.placement = "outside",
+      panel.spacing = grid::unit(0.45, "lines"),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold", color = ink_color),
+      legend.text = element_text(color = ink_color),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+}
+
+yeo17_count_plot <- ggplot(yeo17_summary, aes(x = retained_bipolar_channels, y = patient_alias)) +
+  geom_segment(
+    aes(x = 0, xend = retained_bipolar_channels, yend = patient_alias),
+    color = grid_color,
+    linewidth = 1.1,
+    lineend = "round"
+  ) +
+  geom_point(
+    aes(size = mapped_yeo17_bipolar_channels, fill = covered_yeo17_networks),
+    shape = 21,
+    color = ink_color,
+    stroke = 0.35,
+    alpha = 0.95
+  ) +
+  geom_text(
+    aes(label = retained_bipolar_channels),
+    nudge_x = 4.5,
+    color = ink_color,
+    size = 3.0,
+    hjust = 0
+  ) +
+  scale_size_continuous(name = "Mapped Yeo17\nbipolar channels", range = c(2.8, 8.5)) +
+  scale_fill_gradient(
+    name = "Covered Yeo17\nnetworks",
+    low = "#F1E7D4",
+    high = warm_high
+  ) +
+  labs(x = "Retained bipolar channels", y = "Patient") +
+  expand_limits(x = max(yeo17_summary$retained_bipolar_channels) + 20) +
+  validation_theme()
+
+yeo17_heatmap <- ggplot(yeo17_long, aes(x = network, y = patient_alias, fill = coverage_pct)) +
+  geom_tile(color = scales::alpha(grid_color, 0.8), linewidth = 0.45) +
+  geom_text(aes(label = count_label), color = ink_color, size = 2.9) +
+  coord_fixed() +
+  scale_fill_gradient(
+    low = "#F4EADC",
+    high = warm_high,
+    name = "Coverage (%)"
+  ) +
+  labs(x = "Yeo17 network", y = "Patient") +
+  validation_theme() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = rel(0.84)),
+    plot.margin = margin(10, 16, 10, 0)
+  )
+
+yeo17_combined <- yeo17_count_plot + yeo17_heatmap + plot_layout(widths = c(1.0, 2.25))
+
+transition_plot <- ggplot(transition_group, aes(x = to_label, y = from_label, fill = transition_pct)) +
+  geom_tile(color = scales::alpha(grid_color, 0.85), linewidth = 0.55) +
+  geom_text(aes(label = transition_label), color = ink_color, size = 3.2) +
+  coord_fixed() +
+  scale_fill_gradient(
+    low = "#F4EADC",
+    high = warm_high,
+    name = "Transition (%)"
+  ) +
+  labs(x = "To archetype", y = "From archetype") +
+  validation_theme()
+
+model_order_plot <- ggplot() +
+  geom_vline(xintercept = 4, color = warm_high, linewidth = 0.6, linetype = "dashed") +
+  geom_line(
+    data = model_order_subject_long,
+    aes(x = n_states, y = value, group = patient_id),
+    color = scales::alpha(muted_color, 0.45),
+    linewidth = 0.4
+  ) +
+  geom_point(
+    data = model_order_subject_long,
+    aes(x = n_states, y = value),
+    color = scales::alpha(muted_color, 0.45),
+    size = 0.9
+  ) +
+  geom_line(
+    data = model_order_group_long,
+    aes(x = n_states, y = value, color = metric_label),
+    linewidth = 1.0,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = model_order_group_long,
+    aes(x = n_states, y = value, fill = retained_main_text_default),
+    shape = 21,
+    size = 2.4,
+    color = ink_color,
+    stroke = 0.32,
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(values = c(`TRUE` = highlight_fill, `FALSE` = panel_fill)) +
+  scale_x_continuous(breaks = sort(unique(model_order_group_long$n_states))) +
+  facet_wrap(~metric_label, nrow = 1, scales = "free_y") +
+  labs(x = "Number of field states (K)", y = "Metric value") +
+  validation_theme()
+
+support_plot <- ggplot(support_summary, aes(x = archetype_label, y = n_subjects, fill = archetype_label)) +
+  geom_col(width = 0.72, color = panel_fill, linewidth = 0.4) +
+  geom_text(aes(label = support_label), vjust = -0.35, color = ink_color, size = 3.2) +
+  geom_text(aes(label = similarity_label, y = n_subjects - 1.0), color = panel_fill, size = 3.0, fontface = "bold") +
+  scale_fill_manual(values = archetype_palette, guide = "none") +
+  scale_y_continuous(breaks = c(0, 5, 10, 15, 20), limits = c(0, 21)) +
+  labs(x = "Group archetype", y = "Supporting patients") +
+  validation_theme()
+
+assignment_null_plot <- ggplot() +
+  ggdist::stat_halfeye(
+    data = filter(assignment_null_long, source == "null"),
+    aes(x = archetype_label, y = assignment_similarity, fill = archetype_label),
+    adjust = 0.7,
+    width = 0.65,
+    slab_alpha = 0.82,
+    justification = -0.22,
+    point_colour = NA,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = filter(assignment_null_long, source == "observed"),
+    aes(x = archetype_label, y = assignment_similarity),
+    position = position_jitter(width = 0.075, height = 0),
+    color = scales::alpha(ink_color, 0.5),
+    size = 1.5
+  ) +
+  geom_linerange(
+    data = filter(assignment_null_summary, source == "observed"),
+    aes(x = archetype_label, ymin = q05_similarity, ymax = q95_similarity),
+    color = ink_color,
+    linewidth = 0.8
+  ) +
+  geom_point(
+    data = filter(assignment_null_summary, source == "observed"),
+    aes(x = archetype_label, y = mean_similarity),
+    shape = 23,
+    size = 2.9,
+    fill = panel_fill,
+    color = ink_color,
+    stroke = 0.42
+  ) +
+  scale_fill_manual(values = archetype_palette) +
+  labs(x = "Group archetype", y = "Assignment similarity") +
+  validation_theme()
+
+field_state_reproducibility <- (
+  transition_plot +
+  model_order_plot +
+  support_plot +
+  assignment_null_plot
+) +
+  plot_layout(widths = c(1.0, 1.55), heights = c(1.0, 1.0)) +
+  plot_annotation(theme = theme(plot.background = element_rect(fill = bg_fill, color = NA)))
+
+lag_effect_plot <- ggplot(lag_curve, aes(x = lag_ms, y = mean_effect_x1000)) +
+  geom_hline(yintercept = 0, color = grid_color, linewidth = 0.55) +
+  geom_line(color = warm_high, linewidth = 1.0) +
+  geom_point(aes(fill = q_flag), shape = 21, size = 2.7, color = ink_color, stroke = 0.28) +
+  scale_fill_manual(values = c("FDR < 0.05" = highlight_fill, "n.s." = panel_fill), name = "Lag-wise test") +
+  scale_x_continuous(breaks = seq(-40, 40, by = 20)) +
+  labs(x = "Lag (ms)", y = "Observed minus null coupling (x1000)") +
+  validation_theme()
+
+lag_overlay_plot <- lag_curve %>%
+  select(lag_ms, mean_observed_x1000, mean_null_x1000) %>%
+  pivot_longer(cols = c(mean_observed_x1000, mean_null_x1000), names_to = "curve", values_to = "value") %>%
+  mutate(curve = factor(curve, levels = c("mean_observed_x1000", "mean_null_x1000"), labels = c("Observed", "Null mean"))) %>%
+  ggplot(aes(x = lag_ms, y = value, color = curve)) +
+  geom_line(linewidth = 1.0) +
+  geom_point(size = 2.0) +
+  scale_color_manual(values = c("Observed" = warm_high, "Null mean" = cool_low), name = NULL) +
+  scale_x_continuous(breaks = seq(-40, 40, by = 20)) +
+  labs(x = "Lag (ms)", y = "Mean coupling (x1000)") +
+  validation_theme()
+
+peak_lag_plot <- ggplot(subject_peaks, aes(x = peak_lag_ms)) +
+  geom_histogram(binwidth = 8, boundary = -40, fill = warm_mid, color = panel_fill, linewidth = 0.4) +
+  geom_vline(xintercept = 0, color = ink_color, linewidth = 0.6, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(-40, 40, by = 20)) +
+  labs(x = "Peak lag (ms)", y = "Patients") +
+  validation_theme()
+
+peak_width_plot <- ggplot(subject_peaks, aes(x = "Peak width", y = peak_width_ms)) +
+  ggdist::stat_halfeye(
+    fill = highlight_fill,
+    color = warm_high,
+    adjust = 0.8,
+    width = 0.55,
+    point_colour = NA
+  ) +
+  geom_boxplot(
+    width = 0.14,
+    outlier.shape = NA,
+    fill = panel_fill,
+    color = ink_color,
+    linewidth = 0.5
+  ) +
+  geom_jitter(width = 0.06, height = 0, color = scales::alpha(ink_color, 0.55), size = 1.7) +
+  labs(x = "Distribution", y = "Peak width (ms)") +
+  validation_theme() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+lag_decomposition <- (
+  lag_effect_plot +
+  lag_overlay_plot +
+  peak_lag_plot +
+  peak_width_plot
+) +
+  plot_layout(ncol = 2) +
+  plot_annotation(theme = theme(plot.background = element_rect(fill = bg_fill, color = NA)))
+
+group_topography_plot <- build_topomap_plot(
+  group_topomap_grid,
+  group_topomap_values,
+  facet_formula = ~ archetype_label,
+  strip_text_size = 10.4
+)
+
+representative_topography_plot <- build_topomap_plot(
+  representative_topomap_grid,
+  representative_topomap_values,
+  facet_formula = patient_display ~ archetype_label,
+  strip_text_size = 9.6
+)
+
+conditioned_examples_plot <- build_topomap_plot(
+  topomap_grid,
+  topomap_values,
+  facet_formula = patient_display ~ archetype_label,
+  strip_text_size = 9.6
+)
+
+yeo17_path <- file.path(output_dir, paste0(output_stem, "_yeo17_cohort_characterization.svg"))
+transition_path <- file.path(output_dir, paste0(output_stem, "_field_state_transition_matrix.svg"))
+repro_path <- file.path(output_dir, paste0(output_stem, "_field_state_reproducibility.svg"))
+support_path <- file.path(output_dir, paste0(output_stem, "_archetype_support_and_null.svg"))
+model_order_path <- file.path(output_dir, paste0(output_stem, "_field_state_model_order_validation.svg"))
+lag_path <- file.path(output_dir, paste0(output_stem, "_lag_decomposition.svg"))
+group_topo_path <- file.path(output_dir, paste0(output_stem, "_conditioned_eeg_group_topographies.svg"))
+rep_topo_path <- file.path(output_dir, paste0(output_stem, "_conditioned_eeg_representative_subjects.svg"))
+combined_topo_path <- file.path(output_dir, paste0(output_stem, "_conditioned_eeg_examples.svg"))
+
+save_svg(yeo17_combined, yeo17_path, width = 15.2, height = 8.4)
+save_svg(transition_plot, transition_path, width = 6.4, height = 5.6)
+save_svg(model_order_plot, model_order_path, width = 11.4, height = 4.8)
+save_svg(support_plot + assignment_null_plot + plot_layout(widths = c(0.92, 1.08)), support_path, width = 11.2, height = 4.9)
+save_svg(field_state_reproducibility, repro_path, width = 13.8, height = 9.6)
+save_svg(lag_decomposition, lag_path, width = 13.0, height = 8.9)
+save_svg(group_topography_plot, group_topo_path, width = 10.8, height = 3.5)
+save_svg(representative_topography_plot, rep_topo_path, width = 10.8, height = 7.6)
+save_svg(conditioned_examples_plot, combined_topo_path, width = 10.8, height = 9.9)
+
+figure_manifest <- tibble(
+  figure_output = c(
+    "yeo17_cohort_characterization",
+    "field_state_transition_matrix",
+    "field_state_model_order_validation",
+    "archetype_support_and_null",
+    "field_state_reproducibility",
+    "lag_decomposition",
+    "conditioned_eeg_group_topographies",
+    "conditioned_eeg_representative_subjects",
+    "conditioned_eeg_examples"
+  ),
+  file_name = basename(c(
+    yeo17_path,
+    transition_path,
+    model_order_path,
+    support_path,
+    repro_path,
+    lag_path,
+    group_topo_path,
+    rep_topo_path,
+    combined_topo_path
+  )),
+  path = normalizePath(c(
+    yeo17_path,
+    transition_path,
+    model_order_path,
+    support_path,
+    repro_path,
+    lag_path,
+    group_topo_path,
+    rep_topo_path,
+    combined_topo_path
+  ), winslash = "/", mustWork = FALSE)
+)
+
+write.csv(
+  figure_manifest,
+  file.path(output_dir, paste0(output_stem, "_figure_manifest.csv")),
+  row.names = FALSE
+)
+```

@@ -267,6 +267,51 @@ The document writes:
 
 Primary plots use patient-level matched deltas, while `ide_a_vs_sz_model_ready_long.csv` preserves seizure-level traceability and `seizure_type` labels for later mixed-effects modeling. Interpretation remains observational: the report describes stage deviations from IDE-A, not a causal seizure-propagation model.
 
+## Main-Text Validation Input Export
+
+Use `scripts/export_maintext_validation_inputs.py` when you want a maintained CSV bundle for the main-text validation gaps identified in the updated outline.
+
+Example:
+
+```powershell
+.venv\Scripts\python.exe scripts/export_maintext_validation_inputs.py --runtime-hash 97411c0ec4 --output-dir artifacts/manual/maintext_validation
+```
+
+The script reuses retained caches and report tables, then writes audit-friendly `CSV` inputs into `artifacts/manual/maintext_validation/` for:
+
+- `Figure 1C` patient-level retained bipolar counts and `Yeo17` network coverage
+- `Figure 2D` group field-state transition matrix
+- `Figure 3A/C/D` model-order validation, archetype support, and assignment-similarity null references
+- `Figure 4` fine-lag coupling curves and subject peak summaries
+- `Figure 5A/D` group and representative single-subject archetype-conditioned EEG topography tables
+
+Representative subject labels are anonymized to stable aliases such as `sub-01`, and the export also writes a `maintext_validation_<hash>_manifest.csv` file listing every generated table.
+
+## Main-Text Validation Figure R Markdown
+
+Use `scripts/09_maintext_validation_figures.Rmd` after running the validation input export when you want manuscript-ready `SVG` panels for the missing validation figure family.
+
+Example:
+
+```powershell
+Rscript -e "rmarkdown::render('scripts/09_maintext_validation_figures.Rmd', params=list(input_dir='artifacts/manual/maintext_validation', runtime_hash='97411c0ec4', output_dir='artifacts/manual/maintext_validation'))"
+```
+
+The document writes:
+
+- one `Yeo17` cohort-characterization `SVG`
+- one field-state transition-matrix `SVG`
+- one model-order validation `SVG`
+- one archetype-support-plus-null `SVG`
+- one combined field-state reproducibility `SVG`
+- one lag-decomposition `SVG`
+- one group-conditioned EEG topography `SVG`
+- one representative-subject conditioned EEG topography `SVG`
+- one combined conditioned-EEG example `SVG`
+- one figure-manifest `CSV`
+
+The visual style matches the existing manual figure scripts: warm paper background, explicit axis labels for statistical panels, anonymized subject labels, and `SVG` output through `svglite`.
+
 ## Maintained Supplementary Figure Inputs
 
 `scripts/02_supplementary_figures.Rmd` expects retained supplementary tables such as:
