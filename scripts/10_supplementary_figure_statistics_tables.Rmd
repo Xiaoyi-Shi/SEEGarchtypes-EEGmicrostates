@@ -1,0 +1,1335 @@
+---
+title: "Supplementary Figure Statistics Tables"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+params:
+  fig_dir: "results/figs"
+  manual_root: "artifacts/manual"
+  runtime_hash: "97411c0ec4"
+  output_dir: "artifacts/manual/supplementary_figure_statistics"
+---
+
+```{css, echo=FALSE}
+.three-line-table {
+  border-collapse: collapse;
+  border-top: 2px solid #222;
+  border-bottom: 2px solid #222;
+  width: 100%;
+  font-size: 0.88rem;
+}
+.three-line-table thead {
+  border-bottom: 1.4px solid #222;
+}
+.three-line-table th,
+.three-line-table td {
+  padding: 0.28rem 0.45rem;
+  vertical-align: top;
+}
+.three-line-table caption {
+  caption-side: top;
+  text-align: left;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+if (!requireNamespace("openxlsx", quietly = TRUE)) {
+  stop("Missing required package 'openxlsx'. Install it with: install.packages('openxlsx')")
+}
+
+common_candidates <- c("_common.R", file.path("scripts", "_common.R"))
+common_path <- common_candidates[file.exists(common_candidates)][1]
+if (is.na(common_path)) {
+  stop("Could not find scripts/_common.R from the render working directory.")
+}
+source(common_path)
+
+detect_repo_root <- function() {
+  candidates <- c(getwd(), file.path(getwd(), ".."), file.path(getwd(), "..", ".."))
+  for (candidate in candidates) {
+    if (file.exists(file.path(candidate, "pyproject.toml"))) {
+      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+    }
+  }
+  normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+}
+
+repo_root <- detect_repo_root()
+
+is_absolute_path <- function(path) {
+  grepl("^[A-Za-z]:[/\\\\]|^/", path)
+}
+
+resolve_repo_path <- function(path, must_exist = TRUE) {
+  if (is.null(path) || !nzchar(path)) {
+    if (must_exist) {
+      stop("A non-empty path parameter is required.")
+    }
+    return("")
+  }
+  candidates <- if (is_absolute_path(path)) {
+    c(path)
+  } else {
+    c(file.path(repo_root, path), path, file.path("..", path))
+  }
+  if (must_exist) {
+    for (candidate in candidates) {
+      if (file.exists(candidate)) {
+        return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+      }
+    }
+    stop(paste("Could not resolve required path:", path))
+  }
+  for (candidate in candidates) {
+    if (file.exists(candidate)) {
+      return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
+    }
+  }
+  normalizePath(candidates[[1]], winslash = "/", mustWork = FALSE)
+}
+
+sanitize_sheet_name <- function(x) {
+  x <- gsub("[\\[\\]\\*\\?/\\\\:]", "_", x)
+  x <- gsub("\\s+", "_", x)
+  x <- gsub("_+", "_", x)
+  x <- trimws(x)
+  if (!nzchar(x)) {
+    x <- "Sheet"
+  }
+  substr(x, 1, 31)
+}
+
+make_unique_sheet_names <- function(x) {
+  out <- character(length(x))
+  used <- character()
+  for (i in seq_along(x)) {
+    base <- sanitize_sheet_name(x[[i]])
+    candidate <- base
+    suffix_id <- 2L
+    while (candidate %in% used) {
+      suffix <- paste0("_", suffix_id)
+      candidate <- paste0(substr(base, 1, max(1, 31 - nchar(suffix))), suffix)
+      suffix_id <- suffix_id + 1L
+    }
+    out[[i]] <- candidate
+    used <- c(used, candidate)
+  }
+  out
+}
+
+to_repo_relative <- function(path) {
+  if (is.null(path) || length(path) < 1 || !nzchar(path[[1]])) {
+    return("")
+  }
+  path <- gsub("\\\\", "/", path)
+  normalized <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  root <- paste0(gsub("\\\\", "/", repo_root), "/")
+  starts <- startsWith(tolower(normalized), tolower(root))
+  ifelse(starts, substring(normalized, nchar(root) + 1), normalized)
+}
+
+path_list <- function(paths) {
+  paths <- paths[!is.na(paths) & nzchar(paths)]
+  if (length(paths) == 0) {
+    return("")
+  }
+  paste(vapply(paths, to_repo_relative, character(1)), collapse = "; ")
+}
+
+find_optional_file <- function(pattern) {
+  patterns <- if (is_absolute_path(pattern)) {
+    c(pattern)
+  } else {
+    c(file.path(repo_root, pattern), pattern, file.path("..", pattern))
+  }
+  matches <- unique(unlist(lapply(patterns, Sys.glob), use.names = FALSE))
+  matches <- matches[file.exists(matches)]
+  if (length(matches) == 0) {
+    return("")
+  }
+  normalizePath(sort(matches)[[1]], winslash = "/", mustWork = TRUE)
+}
+
+read_checked_csv <- function(path, required_cols, label, required = TRUE) {
+  resolved <- tryCatch(
+    resolve_repo_path(path, must_exist = TRUE),
+    error = function(e) ""
+  )
+  if (!nzchar(resolved)) {
+    if (required) {
+      stop(paste("Missing required CSV for", label, ":", path))
+    }
+    return(NULL)
+  }
+  df <- read.csv(resolved, stringsAsFactors = FALSE, check.names = FALSE)
+  missing_cols <- setdiff(required_cols, names(df))
+  if (length(missing_cols) > 0) {
+    stop(paste(label, "is missing required columns:", paste(missing_cols, collapse = ", ")))
+  }
+  attr(df, "source_path") <- resolved
+  df
+}
+
+read_required_csv <- function(path, required_cols, label) {
+  read_checked_csv(path, required_cols, label, required = TRUE)
+}
+
+read_optional_csv <- function(path, required_cols, label) {
+  read_checked_csv(path, required_cols, label, required = FALSE)
+}
+
+select_existing <- function(df, columns) {
+  df[, intersect(columns, names(df)), drop = FALSE]
+}
+
+integerish <- function(x) {
+  values <- x[is.finite(x)]
+  length(values) > 0 && all(abs(values - round(values)) < 1e-8)
+}
+
+is_count_col <- function(name) {
+  grepl("(^n_|_n$|count|rank|order|sample|subjects|patients|rows|cols|id$|state$|microstate$|archetype$|peak_id|stage_order|total_|min_duration_ms)", name, ignore.case = TRUE)
+}
+
+format_number <- function(x, digits = 3) {
+  ifelse(
+    is.na(x) | !is.finite(x),
+    "",
+    formatC(x, format = "f", digits = digits)
+  )
+}
+
+format_p_value <- function(x) {
+  ifelse(
+    is.na(x) | !is.finite(x),
+    "",
+    ifelse(x < 0.001, "<0.001", formatC(x, format = "f", digits = 3))
+  )
+}
+
+format_q_value <- function(x) {
+  ifelse(
+    is.na(x) | !is.finite(x),
+    "",
+    ifelse(x < 0.001, "<0.001", formatC(x, format = "f", digits = 3))
+  )
+}
+
+format_mixed_value <- function(x, digits = 3) {
+  if (is.na(x) || length(x) < 1) {
+    return("")
+  }
+  if (is.numeric(x)) {
+    return(format_number(x, digits = digits))
+  }
+  numeric_value <- suppressWarnings(as.numeric(x))
+  if (!is.na(numeric_value) && is.finite(numeric_value) && grepl("^-?[0-9.]+([eE][-+]?[0-9]+)?$", as.character(x))) {
+    return(format_number(numeric_value, digits = digits))
+  }
+  as.character(x)
+}
+
+round_numeric_columns <- function(df) {
+  for (column in names(df)) {
+    if (!is.numeric(df[[column]])) {
+      next
+    }
+    digits <- if (grepl("(^p_|p_value|p_perm|q_|q_fdr)", column, ignore.case = TRUE)) {
+      4
+    } else if (is_count_col(column) || integerish(df[[column]])) {
+      0
+    } else {
+      3
+    }
+    df[[column]] <- round(df[[column]], digits)
+  }
+  df
+}
+
+format_display_table <- function(df) {
+  display <- df
+  for (column in names(display)) {
+    if (!is.numeric(display[[column]])) {
+      next
+    }
+    if (grepl("(^p_|p_value|p_perm)", column, ignore.case = TRUE)) {
+      display[[column]] <- format_p_value(display[[column]])
+    } else if (grepl("(^q_|q_fdr)", column, ignore.case = TRUE)) {
+      display[[column]] <- format_q_value(display[[column]])
+    } else if (is_count_col(column) || integerish(display[[column]])) {
+      display[[column]] <- ifelse(is.na(display[[column]]), "", as.character(round(display[[column]])))
+    } else {
+      display[[column]] <- format_number(display[[column]], digits = 3)
+    }
+  }
+  display
+}
+
+as_logical_flag <- function(x) {
+  if (is.logical(x)) {
+    return(x)
+  }
+  tolower(as.character(x)) %in% c("true", "t", "1", "yes", "y")
+}
+
+safe_mean <- function(x) {
+  values <- x[is.finite(x)]
+  if (length(values) == 0) {
+    return(NA_real_)
+  }
+  mean(values)
+}
+
+safe_sd <- function(x) {
+  values <- x[is.finite(x)]
+  if (length(values) < 2) {
+    return(NA_real_)
+  }
+  sd(values)
+}
+
+safe_median <- function(x) {
+  values <- x[is.finite(x)]
+  if (length(values) == 0) {
+    return(NA_real_)
+  }
+  median(values)
+}
+
+safe_quantile <- function(x, prob) {
+  values <- x[is.finite(x)]
+  if (length(values) == 0) {
+    return(NA_real_)
+  }
+  unname(quantile(values, probs = prob, na.rm = TRUE))
+}
+
+table_registry <- list()
+manifest_rows <- list()
+
+append_manifest <- function(
+  table_id,
+  status,
+  figure_file,
+  panel_label,
+  table_title,
+  caption,
+  source_csv_path,
+  output_csv_path,
+  n_rows,
+  n_cols,
+  notes
+) {
+  manifest_rows[[length(manifest_rows) + 1]] <<- data.frame(
+    table_id = table_id,
+    status = status,
+    figure_file = figure_file,
+    panel_label = panel_label,
+    table_title = table_title,
+    caption = caption,
+    source_csv_path = path_list(source_csv_path),
+    output_csv_path = ifelse(nzchar(output_csv_path), to_repo_relative(output_csv_path), ""),
+    n_rows = n_rows,
+    n_cols = n_cols,
+    notes = notes,
+    stringsAsFactors = FALSE
+  )
+}
+
+write_supplement_table <- function(
+  table_id,
+  figure_file,
+  panel_label,
+  table_title,
+  caption,
+  source_csv_path,
+  df,
+  notes = ""
+) {
+  output_path <- file.path(output_dir, paste0(table_id, ".csv"))
+  export_df <- round_numeric_columns(as.data.frame(df, stringsAsFactors = FALSE))
+  write.csv(export_df, output_path, row.names = FALSE, fileEncoding = "UTF-8")
+  table_registry[[table_id]] <<- list(
+    table_id = table_id,
+    figure_file = figure_file,
+    panel_label = panel_label,
+    table_title = table_title,
+    caption = caption,
+    source_csv_path = source_csv_path,
+    output_csv_path = output_path,
+    data = export_df,
+    notes = notes
+  )
+  append_manifest(
+    table_id = table_id,
+    status = "generated",
+    figure_file = figure_file,
+    panel_label = panel_label,
+    table_title = table_title,
+    caption = caption,
+    source_csv_path = source_csv_path,
+    output_csv_path = output_path,
+    n_rows = nrow(export_df),
+    n_cols = ncol(export_df),
+    notes = notes
+  )
+  invisible(output_path)
+}
+
+register_skipped_table <- function(
+  table_id,
+  figure_file,
+  panel_label,
+  table_title,
+  caption,
+  source_csv_path,
+  notes
+) {
+  append_manifest(
+    table_id = table_id,
+    status = "skipped_optional_source_unavailable",
+    figure_file = figure_file,
+    panel_label = panel_label,
+    table_title = table_title,
+    caption = caption,
+    source_csv_path = source_csv_path,
+    output_csv_path = "",
+    n_rows = 0,
+    n_cols = 0,
+    notes = notes
+  )
+}
+
+write_figure_workbook <- function(figure_file, figure_label, entries) {
+  if (length(entries) == 0) {
+    return(data.frame())
+  }
+  workbook_path <- file.path(
+    output_dir,
+    paste0(tools::file_path_sans_ext(figure_file), "_supplementary_statistics.xlsx")
+  )
+  wb <- openxlsx::createWorkbook()
+  sheet_names <- make_unique_sheet_names(vapply(entries, `[[`, character(1), "table_id"))
+  index_df <- data.frame(
+    sheet_name = sheet_names,
+    table_id = vapply(entries, `[[`, character(1), "table_id"),
+    panel_label = vapply(entries, `[[`, character(1), "panel_label"),
+    table_title = vapply(entries, `[[`, character(1), "table_title"),
+    caption = vapply(entries, `[[`, character(1), "caption"),
+    notes = vapply(entries, `[[`, character(1), "notes"),
+    source_csv_path = vapply(entries, function(x) path_list(x$source_csv_path), character(1)),
+    output_csv_path = vapply(entries, function(x) to_repo_relative(x$output_csv_path), character(1)),
+    stringsAsFactors = FALSE
+  )
+
+  openxlsx::addWorksheet(wb, "Index")
+  openxlsx::writeData(wb, "Index", index_df, withFilter = TRUE)
+  openxlsx::freezePane(wb, "Index", firstRow = TRUE)
+  openxlsx::setColWidths(wb, "Index", cols = seq_len(ncol(index_df)), widths = "auto")
+
+  workbook_map <- list()
+  for (i in seq_along(entries)) {
+    entry <- entries[[i]]
+    sheet_name <- sheet_names[[i]]
+    openxlsx::addWorksheet(wb, sheet_name)
+    openxlsx::writeData(wb, sheet_name, entry$data, withFilter = TRUE)
+    openxlsx::freezePane(wb, sheet_name, firstRow = TRUE)
+    openxlsx::setColWidths(wb, sheet_name, cols = seq_len(ncol(entry$data)), widths = "auto")
+    workbook_map[[length(workbook_map) + 1]] <- data.frame(
+      table_id = entry$table_id,
+      figure_file = figure_file,
+      figure_label = figure_label,
+      workbook_path = workbook_path,
+      sheet_name = sheet_name,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  openxlsx::saveWorkbook(wb, workbook_path, overwrite = TRUE)
+  dplyr::bind_rows(workbook_map)
+}
+
+fig_dir <- resolve_repo_path(params$fig_dir, must_exist = TRUE)
+manual_root <- resolve_repo_path(params$manual_root, must_exist = TRUE)
+runtime_hash <- params$runtime_hash
+output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
+
+figure_map <- tibble::tibble(
+  figure_file = c(
+    "fig1.archetype_brain_maps.pdf",
+    "fig2.patient_archetype_statistics.pdf",
+    "fig3.archetype_eeg_microstate_relationship.pdf",
+    "fig4.ide_a_vs_seizure_stage_comparison.pdf"
+  ),
+  figure_label = c("Figure 1", "Figure 2", "Figure 3", "Figure 4"),
+  manual_family = c(
+    "archetype_brain_maps",
+    "patient_archetype_statistics",
+    "archetype_eeg_microstate_relationship",
+    "ide_a_vs_seizure_stage_comparison"
+  ),
+  final_figure_path = file.path(fig_dir, figure_file),
+  manual_family_path = file.path(manual_root, manual_family)
+)
+
+missing_figures <- figure_map$figure_file[!file.exists(figure_map$final_figure_path)]
+if (length(missing_figures) > 0) {
+  stop(paste("Missing final figure PDF(s):", paste(missing_figures, collapse = ", ")))
+}
+
+missing_manual_dirs <- figure_map$manual_family_path[!dir.exists(figure_map$manual_family_path)]
+if (length(missing_manual_dirs) > 0) {
+  stop(paste("Missing manual output directories:", paste(missing_manual_dirs, collapse = ", ")))
+}
+
+fig_note_path <- file.path(fig_dir, "fig说明.txt")
+fig_note_available <- file.exists(fig_note_path)
+
+panel_map <- tibble::tibble(
+  figure_file = c(
+    rep("fig1.archetype_brain_maps.pdf", 4),
+    rep("fig2.patient_archetype_statistics.pdf", 5),
+    rep("fig3.archetype_eeg_microstate_relationship.pdf", 5),
+    rep("fig4.ide_a_vs_seizure_stage_comparison.pdf", 2)
+  ),
+  panel_label = c(
+    "Figure 1A", "Figure 1B", "Figure 1C", "Figure 1D",
+    "Figure 2A", "Figure 2B", "Figure 2C", "Figure 2D", "Figure 2E",
+    "Figure 3A", "Figure 3B", "Figure 3C", "Figure 3D", "Figure 3E",
+    "Figure 4A", "Figure 4B"
+  ),
+  panel_description = c(
+    "Representative 19-channel EEG waveform and GFP peak trace.",
+    "EEG microstate clustering templates and group microstate parameters.",
+    "Representative SEEG waveform, retained channels, and peak/loading support.",
+    "Four SEEG archetype Yeo17 loading templates.",
+    "Yeo17 mean loadings for four SEEG archetypes.",
+    "Coverage and support parameters across patients.",
+    "Mean duration summaries and paired contrasts against archetype 0.",
+    "Within-archetype patient assignment-similarity ranks.",
+    "SEEG archetype transition probabilities.",
+    "SEEG archetype and EEG microstate template spatial similarity.",
+    "Archetype-conditioned EEG microstate preference and joint/conditional tendency.",
+    "SEEG archetype to EEG switching probability effects.",
+    "Fine-lag coupling from SEEG archetype to EEG microstate.",
+    "Subject-level peak coupling effects.",
+    "Stage-minus-IDE-A coverage and mean-duration effects for EEG microstates and SEEG archetypes.",
+    "Stage-minus-IDE-A EEG-SEEG relationship and transition-tendency effects."
+  )
+)
+
+source_file <- function(family, file_name) {
+  file.path(manual_root, family, file_name)
+}
+
+archetype_stem <- paste0("patient_archetype_yeo17_summary_", runtime_hash)
+relationship_stem <- paste0("seeg_archetype_eeg_microstate_", runtime_hash)
+eeg_stem <- paste0("eeg_microstate_", runtime_hash)
+maintext_stem <- paste0("maintext_validation_", runtime_hash)
+
+add_pq_labels <- function(df) {
+  if ("p_perm" %in% names(df)) {
+    df$p_label <- format_p_value(df$p_perm)
+  }
+  if ("p_value" %in% names(df)) {
+    df$p_label <- format_p_value(df$p_value)
+  }
+  if ("peak_p_perm" %in% names(df)) {
+    df$peak_p_label <- format_p_value(df$peak_p_perm)
+  }
+  if ("q_fdr" %in% names(df)) {
+    df$q_label <- format_q_value(df$q_fdr)
+  }
+  df
+}
+
+metric_value <- function(info_df, key, fallback = NA_character_) {
+  value <- info_df$value[info_df$key == key]
+  if (length(value) == 0) {
+    return(fallback)
+  }
+  as.character(value[[1]])
+}
+
+make_projection_confidence_summary <- function(df) {
+  df %>%
+    group_by(condition, stage, stage_order, metric_family, state_label) %>%
+    summarise(
+      n_patients = dplyr::n_distinct(patient_id),
+      mean_confidence = safe_mean(confidence),
+      sd_confidence = safe_sd(confidence),
+      median_confidence = safe_median(confidence),
+      q1_confidence = safe_quantile(confidence, 0.25),
+      q3_confidence = safe_quantile(confidence, 0.75),
+      min_confidence = min(confidence, na.rm = TRUE),
+      max_confidence = max(confidence, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(stage_order, metric_family, state_label)
+}
+
+make_dwell_contrasts <- function(parameter_long) {
+  dwell <- parameter_long %>%
+    filter(metric == "mean_dwell_ms" | metric_label == "Mean dwell time (ms)") %>%
+    select(patient_id, archetype_label, value)
+  dwell_wide <- dwell %>%
+    tidyr::pivot_wider(names_from = archetype_label, values_from = value)
+  archetype_levels <- sort(setdiff(names(dwell_wide), "patient_id"))
+  reference <- archetype_levels[[1]]
+  targets <- archetype_levels[-1]
+  rows <- lapply(targets, function(target) {
+    keep <- is.finite(dwell_wide[[reference]]) & is.finite(dwell_wide[[target]])
+    diff_values <- dwell_wide[[target]][keep] - dwell_wide[[reference]][keep]
+    n_pairs <- length(diff_values)
+    if (n_pairs > 1) {
+      test <- t.test(diff_values)
+      t_stat <- unname(test$statistic)
+      p_value <- unname(test$p.value)
+      ci_low <- unname(test$conf.int[[1]])
+      ci_high <- unname(test$conf.int[[2]])
+    } else {
+      t_stat <- NA_real_
+      p_value <- NA_real_
+      ci_low <- NA_real_
+      ci_high <- NA_real_
+    }
+    data.frame(
+      contrast = paste(target, "minus", reference),
+      n_pairs = n_pairs,
+      reference_archetype = reference,
+      target_archetype = target,
+      reference_mean_ms = safe_mean(dwell_wide[[reference]][keep]),
+      target_mean_ms = safe_mean(dwell_wide[[target]][keep]),
+      mean_difference_ms = safe_mean(diff_values),
+      sd_difference_ms = safe_sd(diff_values),
+      se_difference_ms = ifelse(n_pairs > 1, safe_sd(diff_values) / sqrt(n_pairs), NA_real_),
+      ci_low_ms = ci_low,
+      ci_high_ms = ci_high,
+      t_statistic = t_stat,
+      p_value = p_value,
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- dplyr::bind_rows(rows)
+  out$q_fdr <- p.adjust(out$p_value, method = "BH")
+  add_pq_labels(out)
+}
+
+make_assignment_rank_table <- function(parameter_long) {
+  aliases <- parameter_long %>%
+    distinct(patient_id) %>%
+    arrange(patient_id) %>%
+    mutate(patient_alias = sprintf("sub-%02d", dplyr::row_number()))
+  parameter_long %>%
+    filter(metric == "assignment_similarity" | metric_label == "Assignment similarity") %>%
+    left_join(aliases, by = "patient_id") %>%
+    group_by(archetype_label) %>%
+    arrange(desc(value), .by_group = TRUE) %>%
+    mutate(rank = dplyr::row_number()) %>%
+    ungroup() %>%
+    transmute(
+      archetype_label,
+      rank,
+      patient_alias,
+      assignment_similarity = value
+    )
+}
+
+# Figure 1 sources and tables.
+eeg_info_path <- source_file("eeg_microstate_overview", paste0(eeg_stem, "_waveform_segment_info.csv"))
+eeg_gfp_path <- source_file("eeg_microstate_overview", paste0(eeg_stem, "_waveform_gfp_peaks.csv"))
+eeg_group_path <- source_file("eeg_microstate_overview", paste0(eeg_stem, "_group_parameters.csv"))
+eeg_template_path <- source_file("eeg_microstate_overview", paste0(eeg_stem, "_template_values.csv"))
+
+eeg_info <- read_required_csv(eeg_info_path, c("key", "value"), "Figure 1A EEG waveform segment info")
+eeg_gfp <- read_required_csv(eeg_gfp_path, c("relative_time_ms", "gfp_uv", "is_peak"), "Figure 1A EEG GFP peaks")
+eeg_group <- read_required_csv(eeg_group_path, c("microstate_label", "count", "mean", "std", "median", "metric", "metric_label"), "Figure 1B EEG microstate group parameters")
+eeg_templates <- read_required_csv(eeg_template_path, c("microstate_label", "channel", "value"), "Figure 1B EEG template values")
+
+eeg_peak_flags <- as_logical_flag(eeg_gfp$is_peak)
+fig1a_table <- tibble::tibble(
+  statistic = c(
+    "source_patient",
+    "start_sec",
+    "end_sec",
+    "duration_sec",
+    "sampling_frequency_hz",
+    "n_channels",
+    "n_samples",
+    "n_gfp_peaks",
+    "mean_gfp_uV",
+    "median_gfp_uV",
+    "max_gfp_uV"
+  ),
+  value = c(
+    metric_value(eeg_info, "patient_id"),
+    format_mixed_value(metric_value(eeg_info, "start_sec")),
+    format_mixed_value(metric_value(eeg_info, "end_sec")),
+    format_mixed_value(metric_value(eeg_info, "duration_sec")),
+    format_mixed_value(metric_value(eeg_info, "sfreq")),
+    format_mixed_value(metric_value(eeg_info, "n_channels"), digits = 0),
+    format_mixed_value(metric_value(eeg_info, "n_samples"), digits = 0),
+    format_mixed_value(sum(eeg_peak_flags, na.rm = TRUE), digits = 0),
+    format_mixed_value(safe_mean(eeg_gfp$gfp_uv)),
+    format_mixed_value(safe_median(eeg_gfp$gfp_uv)),
+    format_mixed_value(max(eeg_gfp$gfp_uv, na.rm = TRUE))
+  ),
+  unit = c("", "s", "s", "s", "Hz", "channels", "samples", "peaks", "uV", "uV", "uV")
+)
+
+write_supplement_table(
+  table_id = "fig1a_eeg_waveform_gfp_summary",
+  figure_file = "fig1.archetype_brain_maps.pdf",
+  panel_label = "Figure 1A",
+  table_title = "EEG waveform and GFP peak summary",
+  caption = "Table S1A. Descriptive support for the representative EEG waveform and GFP peak panel.",
+  source_csv_path = c(attr(eeg_info, "source_path"), attr(eeg_gfp, "source_path")),
+  df = fig1a_table,
+  notes = "Illustrative example segment; values are descriptive and no inferential test is implied."
+)
+
+fig1b_params <- eeg_group %>%
+  select(microstate_label, metric_label, count, mean, std, median, min, max) %>%
+  arrange(metric_label, microstate_label)
+
+write_supplement_table(
+  table_id = "fig1b_eeg_microstate_group_parameters",
+  figure_file = "fig1.archetype_brain_maps.pdf",
+  panel_label = "Figure 1B",
+  table_title = "EEG microstate group parameters",
+  caption = "Table S1B. Group-level EEG microstate parameter summaries corresponding to Figure 1B.",
+  source_csv_path = attr(eeg_group, "source_path"),
+  df = fig1b_params,
+  notes = "Descriptive group summaries across subjects."
+)
+
+fig1b_templates <- eeg_templates %>%
+  select(microstate_label, channel, value) %>%
+  arrange(microstate_label, channel)
+
+write_supplement_table(
+  table_id = "fig1b_eeg_microstate_template_values",
+  figure_file = "fig1.archetype_brain_maps.pdf",
+  panel_label = "Figure 1B",
+  table_title = "EEG microstate template channel weights",
+  caption = "Table S1C. Channel-level EEG microstate template weights displayed in Figure 1B.",
+  source_csv_path = attr(eeg_templates, "source_path"),
+  df = fig1b_templates,
+  notes = "Template weights are exported source values rather than inferential statistics."
+)
+
+seeg_info_path <- find_optional_file(file.path(params$manual_root, "seeg_peak_segments", "*_segment_info.csv"))
+seeg_peak_path <- find_optional_file(file.path(params$manual_root, "seeg_peak_segments", "*_peak_summary.csv"))
+seeg_channel_path <- find_optional_file(file.path(params$manual_root, "seeg_peak_segments", "*_channel_layout.csv"))
+
+if (nzchar(seeg_info_path) && nzchar(seeg_peak_path)) {
+  seeg_info <- read_required_csv(seeg_info_path, c("key", "value"), "Figure 1C SEEG segment info")
+  seeg_peak <- read_required_csv(seeg_peak_path, c("peak_id", "event_sec", "peak_metric_value", "peak_metric", "normalization", "n_channels_used"), "Figure 1C SEEG peak summary")
+  fig1c_segment <- tibble::tibble(
+    statistic = c(
+      "source_patient",
+      "start_sec",
+      "end_sec",
+      "duration_sec",
+      "n_input_channels",
+      "n_export_channels",
+      "n_samples",
+      "sample_period_sec",
+      "peak_metric",
+      "normalization",
+      "n_detected_peaks",
+      "mean_peak_metric",
+      "median_peak_metric",
+      "max_peak_metric"
+    ),
+    value = c(
+      metric_value(seeg_info, "patient_id"),
+      format_mixed_value(metric_value(seeg_info, "start_sec")),
+      format_mixed_value(metric_value(seeg_info, "end_sec")),
+      format_mixed_value(metric_value(seeg_info, "duration_sec")),
+      format_mixed_value(metric_value(seeg_info, "n_input_channels"), digits = 0),
+      format_mixed_value(metric_value(seeg_info, "n_export_channels", metric_value(seeg_info, "n_channels")), digits = 0),
+      format_mixed_value(metric_value(seeg_info, "n_samples"), digits = 0),
+      format_mixed_value(metric_value(seeg_info, "sample_period_sec"), digits = 4),
+      metric_value(seeg_info, "peak_metric"),
+      metric_value(seeg_info, "normalization"),
+      format_mixed_value(nrow(seeg_peak), digits = 0),
+      format_mixed_value(safe_mean(seeg_peak$peak_metric_value)),
+      format_mixed_value(safe_median(seeg_peak$peak_metric_value)),
+      format_mixed_value(max(seeg_peak$peak_metric_value, na.rm = TRUE))
+    ),
+    unit = c("", "s", "s", "s", "channels", "channels", "samples", "s", "", "", "peaks", "metric units", "metric units", "metric units")
+  )
+  write_supplement_table(
+    table_id = "fig1c_seeg_waveform_peak_summary",
+    figure_file = "fig1.archetype_brain_maps.pdf",
+    panel_label = "Figure 1C",
+    table_title = "SEEG waveform and peak-metric summary",
+    caption = "Table S1D. Descriptive support for the representative SEEG waveform and retained peak metric panel.",
+    source_csv_path = c(attr(seeg_info, "source_path"), attr(seeg_peak, "source_path")),
+    df = fig1c_segment,
+    notes = "Illustrative example segment; values summarize the exported waveform support table."
+  )
+} else {
+  register_skipped_table(
+    table_id = "fig1c_seeg_waveform_peak_summary",
+    figure_file = "fig1.archetype_brain_maps.pdf",
+    panel_label = "Figure 1C",
+    table_title = "SEEG waveform and peak-metric summary",
+    caption = "Table S1D. Descriptive support for the representative SEEG waveform and retained peak metric panel.",
+    source_csv_path = c(seeg_info_path, seeg_peak_path),
+    notes = "Optional SEEG peak-segment CSV exports were not available; no statistics were fabricated from the figure artwork."
+  )
+}
+
+if (nzchar(seeg_channel_path)) {
+  seeg_channels <- read_required_csv(seeg_channel_path, c("bipolar_channel", "region", "valid_same_region"), "Figure 1C SEEG channel layout")
+  fig1c_channels <- seeg_channels %>%
+    mutate(valid_same_region = as_logical_flag(valid_same_region)) %>%
+    group_by(region) %>%
+    summarise(
+      n_bipolar_channels = dplyr::n_distinct(bipolar_channel),
+      n_valid_same_region = sum(valid_same_region, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(n_bipolar_channels), region)
+  write_supplement_table(
+    table_id = "fig1c_seeg_region_channel_support",
+    figure_file = "fig1.archetype_brain_maps.pdf",
+    panel_label = "Figure 1C",
+    table_title = "SEEG regional channel support",
+    caption = "Table S1E. Regional bipolar-channel support for the representative SEEG waveform/export in Figure 1C.",
+    source_csv_path = attr(seeg_channels, "source_path"),
+    df = fig1c_channels,
+    notes = "Region labels are inherited from the exported SEEG channel-layout table."
+  )
+} else {
+  register_skipped_table(
+    table_id = "fig1c_seeg_region_channel_support",
+    figure_file = "fig1.archetype_brain_maps.pdf",
+    panel_label = "Figure 1C",
+    table_title = "SEEG regional channel support",
+    caption = "Table S1E. Regional bipolar-channel support for the representative SEEG waveform/export in Figure 1C.",
+    source_csv_path = seeg_channel_path,
+    notes = "Optional SEEG channel-layout CSV export was not available."
+  )
+}
+
+fig1d_source <- read_required_csv(
+  source_file("archetype_brain_maps", paste0(archetype_stem, "_ggseg_summary_long.csv")),
+  c("archetype_label", "network", "mean_loading", "support_n", "support_fraction", "n_patients"),
+  "Figure 1D archetype Yeo17 map summary"
+)
+
+fig1d_table <- fig1d_source %>%
+  select(archetype_label, network, mean_loading, support_n, support_fraction, n_patients) %>%
+  arrange(archetype_label, network)
+
+write_supplement_table(
+  table_id = "fig1d_archetype_yeo17_loading_summary",
+  figure_file = "fig1.archetype_brain_maps.pdf",
+  panel_label = "Figure 1D",
+  table_title = "SEEG archetype Yeo17 loading templates",
+  caption = "Table S1F. Yeo17 network loading summaries for the four SEEG archetype templates in Figure 1D.",
+  source_csv_path = attr(fig1d_source, "source_path"),
+  df = fig1d_table,
+  notes = "Mean loadings are computed from the exported patient-archetype Yeo17 summary."
+)
+
+# Figure 2 sources and tables.
+fig2_network <- read_required_csv(
+  source_file("patient_archetype_statistics", paste0(archetype_stem, "_yeo17_network_loading_summary.csv")),
+  c("archetype_label", "network", "n_support", "mean_loading", "sd_loading", "median_loading", "abs_rank"),
+  "Figure 2A Yeo17 loading summary"
+)
+fig2_param_summary <- read_required_csv(
+  source_file("patient_archetype_statistics", paste0(archetype_stem, "_parameter_summary_stats.csv")),
+  c("metric_label", "archetype_label", "mean", "sd", "median", "q1", "q3", "min", "max"),
+  "Figure 2 parameter summary"
+)
+fig2_param_long <- read_required_csv(
+  source_file("patient_archetype_statistics", paste0(archetype_stem, "_parameter_long.csv")),
+  c("patient_id", "archetype_label", "metric", "metric_label", "value"),
+  "Figure 2 parameter long table"
+)
+fig2_transition <- read_required_csv(
+  source_file("maintext_validation", paste0(maintext_stem, "_field_state_transition_group.csv")),
+  c("from_state", "to_state", "n_subjects", "mean_transition_probability", "median_transition_probability", "total_transitions"),
+  "Figure 2E field-state transition group table"
+)
+
+write_supplement_table(
+  table_id = "fig2a_yeo17_archetype_loading_statistics",
+  figure_file = "fig2.patient_archetype_statistics.pdf",
+  panel_label = "Figure 2A",
+  table_title = "Yeo17 network loadings by SEEG archetype",
+  caption = "Table S2A. Yeo17 loading summary statistics for the archetype loading heatmap in Figure 2A.",
+  source_csv_path = attr(fig2_network, "source_path"),
+  df = fig2_network %>% arrange(archetype_label, abs_rank, network),
+  notes = "The rank column orders networks by absolute mean loading within each archetype."
+)
+
+fig2b_metrics <- c("Occupancy (%)", "Peak maps (n)", "Covered Yeo17 networks", "Mapped bipolar channels")
+fig2b_table <- fig2_param_summary %>%
+  filter(metric_label %in% fig2b_metrics) %>%
+  arrange(metric_label, archetype_label)
+
+write_supplement_table(
+  table_id = "fig2b_patient_coverage_support_statistics",
+  figure_file = "fig2.patient_archetype_statistics.pdf",
+  panel_label = "Figure 2B",
+  table_title = "Patient-level coverage and support summaries",
+  caption = "Table S2B. Coverage and support statistics corresponding to Figure 2B.",
+  source_csv_path = attr(fig2_param_summary, "source_path"),
+  df = fig2b_table,
+  notes = "Rows summarize patient-level values within each archetype."
+)
+
+fig2c_summary <- fig2_param_summary %>%
+  filter(metric_label == "Mean dwell time (ms)") %>%
+  arrange(archetype_label)
+
+write_supplement_table(
+  table_id = "fig2c_mean_duration_descriptive_statistics",
+  figure_file = "fig2.patient_archetype_statistics.pdf",
+  panel_label = "Figure 2C",
+  table_title = "Mean duration descriptive statistics",
+  caption = "Table S2C. Archetype-level mean-duration descriptive statistics for Figure 2C.",
+  source_csv_path = attr(fig2_param_summary, "source_path"),
+  df = fig2c_summary,
+  notes = "Mean duration is reported in milliseconds."
+)
+
+fig2c_contrasts <- make_dwell_contrasts(fig2_param_long)
+
+write_supplement_table(
+  table_id = "fig2c_mean_duration_paired_contrasts_vs_a0",
+  figure_file = "fig2.patient_archetype_statistics.pdf",
+  panel_label = "Figure 2C",
+  table_title = "Paired mean-duration contrasts versus archetype 0",
+  caption = "Table S2D. Patient-paired mean-duration contrasts comparing each archetype against the A0 reference.",
+  source_csv_path = attr(fig2_param_long, "source_path"),
+  df = fig2c_contrasts,
+  notes = "Paired tests use patient-level dwell times exported by the Figure 2 statistics workflow; q_fdr is Benjamini-Hochberg adjusted across contrasts."
+)
+
+fig2d_ranks <- make_assignment_rank_table(fig2_param_long)
+
+write_supplement_table(
+  table_id = "fig2d_assignment_similarity_patient_ranks",
+  figure_file = "fig2.patient_archetype_statistics.pdf",
+  panel_label = "Figure 2D",
+  table_title = "Within-archetype patient ranks",
+  caption = "Table S2E. Within-archetype patient ranks by assignment similarity for Figure 2D.",
+  source_csv_path = attr(fig2_param_long, "source_path"),
+  df = fig2d_ranks,
+  notes = "Patient identifiers are replaced by stable aliases generated within this supplement workflow."
+)
+
+fig2e_table <- fig2_transition %>%
+  mutate(
+    from_label = archetype_label(from_state),
+    to_label = archetype_label(to_state),
+    mean_transition_percent = mean_transition_probability * 100,
+    median_transition_percent = median_transition_probability * 100
+  ) %>%
+  select(from_label, to_label, n_subjects, mean_transition_percent, median_transition_percent, total_transitions) %>%
+  arrange(from_label, to_label)
+
+write_supplement_table(
+  table_id = "fig2e_archetype_transition_probabilities",
+  figure_file = "fig2.patient_archetype_statistics.pdf",
+  panel_label = "Figure 2E",
+  table_title = "SEEG archetype transition probabilities",
+  caption = "Table S2F. Group transition probabilities between SEEG archetypes corresponding to Figure 2E.",
+  source_csv_path = attr(fig2_transition, "source_path"),
+  df = fig2e_table,
+  notes = "Transition probabilities are reported as percentages."
+)
+
+# Figure 3 sources and tables.
+fig3_template <- read_required_csv(
+  source_file("archetype_eeg_microstate_relationship", paste0(relationship_stem, "_template_similarity_matrix.csv")),
+  c("archetype_label", "microstate_label", "n_subjects", "mean_similarity", "median_similarity", "min_similarity"),
+  "Figure 3A template similarity matrix"
+)
+fig3_preference <- read_required_csv(
+  source_file("archetype_eeg_microstate_relationship", paste0(relationship_stem, "_state_preference_matrix.csv")),
+  c("archetype_label", "microstate_label", "n_subjects", "effect_pp", "conditional_pct", "baseline_pct", "p_perm", "q_fdr"),
+  "Figure 3B state preference matrix"
+)
+fig3_switching <- read_required_csv(
+  source_file("archetype_eeg_microstate_relationship", paste0(relationship_stem, "_archetype_to_eeg_switching_any.csv")),
+  c("from_label", "to_label", "response_kind", "n_subjects", "effect_pp", "p_perm", "q_fdr"),
+  "Figure 3C switching effects"
+)
+fig3_lag <- read_required_csv(
+  source_file("archetype_eeg_microstate_relationship", paste0(relationship_stem, "_fine_lag_curve.csv")),
+  c("lag_ms", "n_subjects", "effect_x1000", "observed_x1000", "null_x1000", "p_perm", "q_fdr"),
+  "Figure 3D fine-lag curve"
+)
+fig3_peaks <- read_required_csv(
+  source_file("archetype_eeg_microstate_relationship", paste0(relationship_stem, "_subject_peak_summary_anonymized.csv")),
+  c("patient_alias", "peak_lag_ms", "peak_effect_x1000", "peak_width_ms", "peak_p_perm"),
+  "Figure 3E subject peak summary"
+)
+
+write_supplement_table(
+  table_id = "fig3a_template_spatial_similarity",
+  figure_file = "fig3.archetype_eeg_microstate_relationship.pdf",
+  panel_label = "Figure 3A",
+  table_title = "Template spatial similarity",
+  caption = "Table S3A. SEEG archetype by EEG microstate template spatial similarity values for Figure 3A.",
+  source_csv_path = attr(fig3_template, "source_path"),
+  df = fig3_template %>%
+    select(archetype_label, microstate_label, n_subjects, mean_similarity, median_similarity, min_similarity) %>%
+    arrange(archetype_label, microstate_label),
+  notes = "Similarity values are source-table summaries across subjects."
+)
+
+write_supplement_table(
+  table_id = "fig3b_state_preference_joint_tendency",
+  figure_file = "fig3.archetype_eeg_microstate_relationship.pdf",
+  panel_label = "Figure 3B",
+  table_title = "Archetype-conditioned EEG microstate preference",
+  caption = "Table S3B. Conditional EEG microstate preference effects and permutation statistics for Figure 3B.",
+  source_csv_path = attr(fig3_preference, "source_path"),
+  df = add_pq_labels(fig3_preference) %>%
+    select(archetype_label, microstate_label, n_subjects, effect_pp, conditional_pct, baseline_pct, mean_joint_samples, mean_state_samples, p_perm, p_label, q_fdr, q_label) %>%
+    arrange(archetype_label, microstate_label),
+  notes = "Effects are in percentage points; q_fdr is FDR-adjusted across matrix cells."
+)
+
+write_supplement_table(
+  table_id = "fig3c_archetype_to_eeg_switching_effects",
+  figure_file = "fig3.archetype_eeg_microstate_relationship.pdf",
+  panel_label = "Figure 3C",
+  table_title = "SEEG archetype to EEG switching effects",
+  caption = "Table S3C. SEEG archetype transition effects on EEG switching probability for Figure 3C.",
+  source_csv_path = attr(fig3_switching, "source_path"),
+  df = add_pq_labels(fig3_switching) %>%
+    select(from_label, to_label, response_kind, response_state, n_subjects, effect_pp, p_perm, p_label, q_fdr, q_label) %>%
+    arrange(from_label, to_label),
+  notes = "Effects are in percentage points; q_fdr is FDR-adjusted across transition cells."
+)
+
+write_supplement_table(
+  table_id = "fig3d_fine_lag_coupling_curve",
+  figure_file = "fig3.archetype_eeg_microstate_relationship.pdf",
+  panel_label = "Figure 3D",
+  table_title = "Fine-lag coupling curve",
+  caption = "Table S3D. Fine-lag coupling statistics from SEEG archetypes to EEG microstates for Figure 3D.",
+  source_csv_path = attr(fig3_lag, "source_path"),
+  df = add_pq_labels(fig3_lag) %>%
+    select(lag_ms, n_subjects, effect_x1000, observed_x1000, null_x1000, p_perm, p_label, q_fdr, q_label, is_fdr_significant) %>%
+    arrange(lag_ms),
+  notes = "Effects and coupling values are scaled by 1000 for display consistency with the figure."
+)
+
+write_supplement_table(
+  table_id = "fig3e_subject_peak_coupling_effects",
+  figure_file = "fig3.archetype_eeg_microstate_relationship.pdf",
+  panel_label = "Figure 3E",
+  table_title = "Subject peak coupling effects",
+  caption = "Table S3E. Anonymized subject-level peak-lag and coupling-effect summaries for Figure 3E.",
+  source_csv_path = attr(fig3_peaks, "source_path"),
+  df = add_pq_labels(fig3_peaks) %>%
+    select(patient_alias, peak_lag_ms, peak_effect_x1000, peak_width_ms, peak_p_perm, peak_p_label, peak_observed_coupling, peak_null_mean_coupling, n_lags) %>%
+    arrange(patient_alias),
+  notes = "Subject labels are anonymized aliases from the source table."
+)
+
+# Figure 4 sources and tables.
+fig4_primary <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_primary_group_effects.csv"),
+  c("metric_family", "stage", "stage_order", "metric_label", "state_label", "n_patients", "mean_delta", "ci_low", "ci_high", "unit"),
+  "Figure 4A primary group effects"
+)
+fig4_complete <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_complete_case_support.csv"),
+  c("metric_family", "metric", "metric_label", "state_label", "n_any_matched", "n_complete_all_stages", "complete_fraction"),
+  "Figure 4 complete-case support"
+)
+fig4_denominator <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_denominator_qc.csv"),
+  c("metric_family", "condition", "stage", "stage_order", "n_patients", "n_seizures", "n_matched_patients"),
+  "Figure 4 denominator QC"
+)
+fig4_duration <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_stage_duration_qc.csv"),
+  c("stage", "stage_order", "seizure_type", "n_patients", "n_recordings", "n_segments", "n_usable", "median_duration_sec", "q1_duration_sec", "q3_duration_sec", "mean_duration_sec"),
+  "Figure 4 stage duration QC"
+)
+fig4_projection <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_projection_confidence_qc.csv"),
+  c("patient_id", "condition", "stage", "stage_order", "metric_family", "state_label", "confidence"),
+  "Figure 4 projection confidence QC"
+)
+fig4_yeo <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_yeo17_loading_group_effects.csv"),
+  c("metric_family", "stage", "stage_order", "state_label", "assigned_archetype", "network", "n_patients", "mean_delta", "ci_low", "ci_high"),
+  "Figure 4 Yeo17 loading effects"
+)
+fig4_relationship <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_relationship_group_effects.csv"),
+  c("metric_family", "stage", "stage_order", "assigned_archetype", "microstate", "state_label", "n_patients", "mean_delta", "ci_low", "ci_high", "unit"),
+  "Figure 4B relationship effects"
+)
+fig4_seizure_type <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_seizure_type_group_effects.csv"),
+  c("seizure_type", "metric_family", "stage", "stage_order", "metric_label", "state_label", "n_patients", "mean_delta", "ci_low", "ci_high", "unit"),
+  "Figure 4 seizure-type group effects"
+)
+fig4_sensitivity <- read_required_csv(
+  source_file("ide_a_vs_seizure_stage_comparison", "ide_a_vs_sz_repeated_seizure_sensitivity.csv"),
+  c("sensitivity_method", "metric_family", "stage", "stage_order", "metric_label", "state_label", "n_patients", "mean_delta", "plot_mean_delta"),
+  "Figure 4 repeated-seizure sensitivity"
+)
+
+write_supplement_table(
+  table_id = "fig4a_primary_stage_minus_idea_group_effects",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4A",
+  table_title = "Primary stage-minus-IDE-A group effects",
+  caption = "Table S4A. Primary EEG microstate and SEEG archetype stage-minus-IDE-A group effects for Figure 4A.",
+  source_csv_path = attr(fig4_primary, "source_path"),
+  df = fig4_primary %>%
+    select(metric_family, stage, stage_order, metric_label, state_label, n_patients, mean_value, mean_baseline, mean_delta, sd_delta, se_delta, ci_low, ci_high, plot_mean_delta, plot_ci_low, plot_ci_high, unit) %>%
+    arrange(metric_family, metric_label, stage_order, state_label),
+  notes = "Delta values are matched patient stage-minus-IDE-A contrasts; plot_* columns use the figure display scale."
+)
+
+write_supplement_table(
+  table_id = "fig4a_complete_case_support",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4A",
+  table_title = "Complete-case support",
+  caption = "Table S4B. Complete-case support for stage-minus-IDE-A contrasts.",
+  source_csv_path = attr(fig4_complete, "source_path"),
+  df = fig4_complete %>% arrange(metric_family, metric_label, state_label),
+  notes = "Complete fractions indicate support across all seizure stages."
+)
+
+write_supplement_table(
+  table_id = "fig4a_denominator_qc",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4A",
+  table_title = "Denominator QC",
+  caption = "Table S4C. Patient and seizure denominators for IDE-A and seizure-stage comparisons.",
+  source_csv_path = attr(fig4_denominator, "source_path"),
+  df = fig4_denominator %>% arrange(metric_family, condition, stage_order),
+  notes = "Rows report available matched patients and seizure counts before contrast aggregation."
+)
+
+write_supplement_table(
+  table_id = "fig4a_stage_duration_qc",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4A",
+  table_title = "Stage duration QC",
+  caption = "Table S4D. Seizure-stage duration summaries supporting the Figure 4A stage windows.",
+  source_csv_path = attr(fig4_duration, "source_path"),
+  df = fig4_duration %>% arrange(stage_order, seizure_type),
+  notes = "Durations are reported in seconds."
+)
+
+write_supplement_table(
+  table_id = "fig4a_projection_confidence_qc",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4A",
+  table_title = "Projection confidence QC",
+  caption = "Table S4E. Projection-confidence summaries by stage, metric family, and state.",
+  source_csv_path = attr(fig4_projection, "source_path"),
+  df = make_projection_confidence_summary(fig4_projection),
+  notes = "Summaries are computed from the exported patient-level projection-confidence table."
+)
+
+write_supplement_table(
+  table_id = "fig4a_yeo17_loading_stage_delta_effects",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4A",
+  table_title = "Yeo17 loading stage-delta effects",
+  caption = "Table S4F. Yeo17 network loading stage-minus-IDE-A effects used as secondary anatomical support.",
+  source_csv_path = attr(fig4_yeo, "source_path"),
+  df = fig4_yeo %>%
+    select(metric_family, stage, stage_order, state_label, assigned_archetype, network, n_patients, mean_value, mean_baseline, mean_delta, sd_delta, se_delta, ci_low, ci_high) %>%
+    arrange(stage_order, state_label, network),
+  notes = "These rows support secondary Yeo17 loading interpretation and are not derived from figure artwork."
+)
+
+write_supplement_table(
+  table_id = "fig4b_relationship_stage_delta_effects",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4B",
+  table_title = "EEG-SEEG relationship stage-delta effects",
+  caption = "Table S4G. Stage-minus-IDE-A EEG-SEEG relationship effects corresponding to Figure 4B.",
+  source_csv_path = attr(fig4_relationship, "source_path"),
+  df = fig4_relationship %>%
+    select(metric_family, stage, stage_order, assigned_archetype, microstate, state_label, n_patients, mean_value, mean_baseline, mean_delta, sd_delta, se_delta, ci_low, ci_high, plot_mean_delta, plot_ci_low, plot_ci_high, unit) %>%
+    arrange(stage_order, assigned_archetype, microstate),
+  notes = "Relationship effects are reported on the source scale and in plot-scale percentage points where available."
+)
+
+write_supplement_table(
+  table_id = "fig4b_seizure_type_stratified_effects",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4B",
+  table_title = "Seizure-type stratified stage effects",
+  caption = "Table S4H. Seizure-type stratified group effects supporting Figure 4 interpretation.",
+  source_csv_path = attr(fig4_seizure_type, "source_path"),
+  df = fig4_seizure_type %>%
+    select(seizure_type, metric_family, stage, stage_order, metric_label, state_label, n_patients, mean_delta, sd_delta, se_delta, ci_low, ci_high, plot_mean_delta, plot_ci_low, plot_ci_high, unit) %>%
+    arrange(seizure_type, metric_family, metric_label, stage_order, state_label),
+  notes = "Rows are observational strata and should not be interpreted as independent causal effects."
+)
+
+write_supplement_table(
+  table_id = "fig4b_repeated_seizure_sensitivity",
+  figure_file = "fig4.ide_a_vs_seizure_stage_comparison.pdf",
+  panel_label = "Figure 4B",
+  table_title = "Repeated-seizure sensitivity",
+  caption = "Table S4I. Repeated-seizure sensitivity summaries for the stage-minus-IDE-A analysis.",
+  source_csv_path = attr(fig4_sensitivity, "source_path"),
+  df = fig4_sensitivity %>%
+    arrange(sensitivity_method, metric_family, metric_label, stage_order, state_label),
+  notes = "Sensitivity summaries reuse the maintained Figure 4 CSV export."
+)
+
+manifest_df <- dplyr::bind_rows(manifest_rows) %>%
+  arrange(figure_file, panel_label, table_id)
+
+workbook_map_df <- dplyr::bind_rows(lapply(figure_map$figure_file, function(fig) {
+  entries <- table_registry[vapply(table_registry, `[[`, character(1), "figure_file") == fig]
+  figure_label <- figure_map$figure_label[figure_map$figure_file == fig][[1]]
+  write_figure_workbook(fig, figure_label, entries)
+})) %>%
+  mutate(
+    workbook_path = ifelse(nzchar(workbook_path), to_repo_relative(workbook_path), "")
+  )
+
+if (nrow(workbook_map_df) > 0) {
+  manifest_df <- manifest_df %>%
+    left_join(
+      workbook_map_df %>% select(table_id, workbook_path, sheet_name),
+      by = "table_id"
+    )
+} else {
+  manifest_df$workbook_path <- ""
+  manifest_df$sheet_name <- ""
+}
+
+manifest_df <- manifest_df %>%
+  mutate(
+    workbook_path = ifelse(is.na(workbook_path), "", workbook_path),
+    sheet_name = ifelse(is.na(sheet_name), "", sheet_name)
+  )
+
+manifest_path <- file.path(output_dir, "supplementary_figure_statistics_manifest.csv")
+write.csv(manifest_df, manifest_path, row.names = FALSE, fileEncoding = "UTF-8")
+```
+
+## Workflow Inputs
+
+```{r workflow-inputs}
+knitr::kable(
+  data.frame(
+    item = c("fig_dir", "manual_root", "runtime_hash", "output_dir", "figure_note_file", "manifest"),
+    value = c(
+      to_repo_relative(fig_dir),
+      to_repo_relative(manual_root),
+      runtime_hash,
+      to_repo_relative(output_dir),
+      ifelse(fig_note_available, to_repo_relative(fig_note_path), "not found"),
+      to_repo_relative(manifest_path)
+    )
+  ),
+  format = "html",
+  table.attr = "class=\"three-line-table\"",
+  caption = "Table S0. Supplementary figure statistics workflow inputs."
+)
+```
+
+## Figure And Panel Mapping
+
+```{r figure-mapping}
+mapping_table <- figure_map %>%
+  select(figure_label, figure_file, manual_family) %>%
+  left_join(panel_map, by = "figure_file") %>%
+  select(figure_label, figure_file, manual_family, panel_label, panel_description)
+
+knitr::kable(
+  mapping_table,
+  format = "html",
+  table.attr = "class=\"three-line-table\"",
+  caption = "Table S0A. Final figure-to-manual-output and panel mapping used by this workflow."
+)
+```
+
+## Supplementary Tables
+
+```{r render-supplement-tables, results='asis'}
+registry_df <- dplyr::bind_rows(lapply(table_registry, function(x) {
+  data.frame(
+    table_id = x$table_id,
+    figure_file = x$figure_file,
+    panel_label = x$panel_label,
+    table_title = x$table_title,
+    stringsAsFactors = FALSE
+  )
+})) %>%
+  arrange(figure_file, panel_label, table_id)
+
+for (fig in unique(registry_df$figure_file)) {
+  fig_label <- figure_map$figure_label[figure_map$figure_file == fig][[1]]
+  cat("\n\n### ", fig_label, ": ", fig, "\n\n", sep = "")
+  fig_tables <- registry_df$table_id[registry_df$figure_file == fig]
+  for (table_id in fig_tables) {
+    entry <- table_registry[[table_id]]
+    cat("\n\n#### ", entry$panel_label, " - ", entry$table_title, "\n\n", sep = "")
+    if (nzchar(entry$notes)) {
+      cat("*Note.* ", entry$notes, "\n\n", sep = "")
+    }
+    cat(
+      knitr::kable(
+        format_display_table(entry$data),
+        format = "html",
+        table.attr = "class=\"three-line-table\"",
+        caption = entry$caption,
+        escape = TRUE
+      ),
+      "\n\n",
+      sep = ""
+    )
+  }
+}
+```
+
+## Source Availability Notes
+
+```{r source-notes}
+note_rows <- manifest_df %>%
+  filter(status != "generated" | nzchar(notes)) %>%
+  select(table_id, status, figure_file, panel_label, source_csv_path, output_csv_path, notes)
+
+knitr::kable(
+  note_rows,
+  format = "html",
+  table.attr = "class=\"three-line-table\"",
+  caption = "Table S0B. Source availability and interpretation notes for generated or skipped supplementary tables."
+)
+```
+
+## Output Manifest
+
+```{r output-manifest}
+knitr::kable(
+  manifest_df,
+  format = "html",
+  table.attr = "class=\"three-line-table\"",
+  caption = "Table S0C. Audit manifest for supplementary figure statistics tables."
+)
+```

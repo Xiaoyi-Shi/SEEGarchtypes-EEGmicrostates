@@ -1,4 +1,7 @@
-## MODIFIED Requirements
+## Purpose
+Define how SEEG field-state archetypes are interpreted in EEG sensor space through patient-first archetype-conditioned scalp-map summaries, native-grid synchrony outputs, and representative manuscript-ready exports.
+
+## Requirements
 
 ### Requirement: SEEG field-state archetypes SHALL support EEG-space conditioned map summaries
 The system SHALL allow group-matched SEEG field-state archetypes to be related back to EEG sensor space through archetype-conditioned EEG scalp maps derived on the shared analysis axis, and SHALL standardize those outputs as stable sensor-space tables and R-ready conditioned-topography inputs rather than Python-rendered panels.
@@ -34,3 +37,19 @@ The system SHALL estimate near-zero SEEG archetype versus EEG microstate synchro
 - **WHEN** the workflow computes significance for archetype-transition to EEG entry or switching follow-ups
 - **THEN** the null procedure SHALL preserve the temporal structure of the SEEG archetype and EEG state sequences through constrained surrogate generation or equivalent structured permutation
 - **AND** the export layer SHALL route these outputs to supplementary categorized tables and manifest entries
+
+### Requirement: Archetype-conditioned EEG exports SHALL include patient-level scalp-map tables for representative panels
+The system SHALL export patient-level archetype-conditioned EEG scalp-map tables with stable channel ordering, stable archetype ordering, and per-subject support metadata so R Markdown workflows can render representative single-subject panels without recomputing conditioned maps from raw EEG samples.
+
+#### Scenario: Representative single-subject conditioned EEG maps are exported
+- **WHEN** group-level archetype-conditioned EEG maps are derived for manuscript reporting
+- **THEN** the export layer SHALL also emit patient-level conditioned-EEG map tables that preserve channel identities, archetype identities, and support counts or equivalent confidence metadata
+- **AND** the patient-level tables SHALL remain directly consumable by manuscript-facing R workflows
+
+### Requirement: Archetype-conditioned EEG exports SHALL support deterministic representative-subject selection
+The system SHALL emit enough metadata for manuscript workflows to choose representative single-subject conditioned EEG panels reproducibly and anonymize displayed subject labels without losing patient-first traceability in the exported tables.
+
+#### Scenario: Manuscript workflow selects representative subjects
+- **WHEN** representative single-subject EEG panels are prepared for plotting
+- **THEN** the export layer SHALL provide stable subject identifiers plus ranking or filtering metadata such as support, confidence, or similarity summaries
+- **AND** downstream figure workflows SHALL be able to display anonymized labels while keeping the selection reproducible from the exported tables

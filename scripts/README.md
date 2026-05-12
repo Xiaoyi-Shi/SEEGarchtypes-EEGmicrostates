@@ -289,7 +289,7 @@ Representative subject labels are anonymized to stable aliases such as `sub-01`,
 
 ## Main-Text Validation Figure R Markdown
 
-Use `scripts/09_maintext_validation_figures.Rmd` after running the validation input export when you want manuscript-ready `SVG` panels for the missing validation figure family.
+Use `scripts/09_maintext_validation_figures.Rmd` after running the validation input export when you want manuscript-ready `SVG` panels for the missing validation figure family. The document also reads retained-cohort `SEEG` contact annotations from `datas/data_01_seeg/*/MNI/Atlas.tsv` to build touchpoint density maps in `Yeo17` and `MNI` space.
 
 Example:
 
@@ -308,9 +308,31 @@ The document writes:
 - one group-conditioned EEG topography `SVG`
 - one representative-subject conditioned EEG topography `SVG`
 - one combined conditioned-EEG example `SVG`
+- one cohort `SEEG` touchpoint `Yeo17` density-brain-map `SVG`
+- one cohort `SEEG` touchpoint `MNI` projection-density `SVG`
+- one combined `SEEG` touchpoint overview `SVG`
 - one figure-manifest `CSV`
 
-The visual style matches the existing manual figure scripts: warm paper background, explicit axis labels for statistical panels, anonymized subject labels, and `SVG` output through `svglite`.
+The visual style matches the existing manual figure scripts: warm paper background, explicit axis labels for statistical panels, anonymized subject labels, cohort-level `Yeo17`/`MNI` touchpoint summaries, and `SVG` output through `svglite`.
+
+## Supplementary Figure Statistics Tables R Markdown
+
+Use `scripts/10_supplementary_figure_statistics_tables.Rmd` when you want supplement-ready statistical tables for the final assembled figure PDFs in `results/figs/` without regenerating any figure panels.
+
+Example:
+
+```powershell
+Rscript -e "rmarkdown::render('scripts/10_supplementary_figure_statistics_tables.Rmd', params=list(fig_dir='results/figs', manual_root='artifacts/manual', runtime_hash='97411c0ec4', output_dir='artifacts/manual/supplementary_figure_statistics'))"
+```
+
+The document reads `results/figs/fig说明.txt` for panel context and maps the final figure filenames to the matching manual-output families:
+
+- `fig1.archetype_brain_maps.pdf` -> `artifacts/manual/archetype_brain_maps/`
+- `fig2.patient_archetype_statistics.pdf` -> `artifacts/manual/patient_archetype_statistics/`
+- `fig3.archetype_eeg_microstate_relationship.pdf` -> `artifacts/manual/archetype_eeg_microstate_relationship/`
+- `fig4.ide_a_vs_seizure_stage_comparison.pdf` -> `artifacts/manual/ide_a_vs_seizure_stage_comparison/`
+
+The workflow also uses maintained support exports from `artifacts/manual/eeg_microstate_overview/`, `artifacts/manual/seeg_peak_segments/`, and `artifacts/manual/maintext_validation/` when those are the source tables behind a subpanel. It writes one `CSV` per generated supplementary table, one `XLSX` workbook per final figure with each subpanel/table on its own sheet, and `supplementary_figure_statistics_manifest.csv` under `artifacts/manual/supplementary_figure_statistics/`. The rendered HTML uses simple three-line-table styling for manuscript supplements and does not write `SVG`, `PNG`, `PDF`, or other figure files.
 
 ## Maintained Supplementary Figure Inputs
 

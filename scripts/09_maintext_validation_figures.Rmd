@@ -3,6 +3,7 @@ title: "Main-Text Validation Figures"
 output: html_document
 params:
   input_dir: "artifacts/manual/maintext_validation"
+  data_root: "datas/data_01_seeg"
   runtime_hash: "97411c0ec4"
   output_dir: "artifacts/manual/maintext_validation"
 ---
@@ -29,16 +30,27 @@ resolve_repo_path <- function(path, must_exist = TRUE) {
   normalizePath(candidate, winslash = "/", mustWork = FALSE)
 }
 
-for (pkg in c("svglite", "ggdist", "ggtext", "paletteer", "patchwork")) {
+for (pkg in c("svglite", "ggdist", "ggtext", "paletteer", "patchwork", "reticulate")) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
     stop(paste0("Missing required package '", pkg, "'. Install it with: install.packages('", pkg, "')"))
   }
 }
+if (!requireNamespace("ggseg", quietly = TRUE)) {
+  stop("Missing required package 'ggseg'. Install it with: install.packages('ggseg', repos = 'https://cloud.r-project.org')")
+}
+if (!requireNamespace("ggsegYeo2011", quietly = TRUE)) {
+  stop("Missing required package 'ggsegYeo2011'. Install it with: remotes::install_github('ggseg/ggsegYeo2011', upgrade = 'never')")
+}
 
 library(ggdist)
 library(ggtext)
+library(ggseg)
+library(ggsegYeo2011)
 library(paletteer)
 library(patchwork)
+library(reticulate)
+
+reticulate::use_python(resolve_repo_path(file.path(".venv", "Scripts", "python.exe"), must_exist = TRUE), required = TRUE)
 
 input_dir <- resolve_repo_path(params$input_dir, must_exist = TRUE)
 output_dir <- ensure_output_dir(resolve_repo_path(params$output_dir, must_exist = FALSE))
@@ -562,6 +574,485 @@ conditioned_examples_plot <- build_topomap_plot(
   strip_text_size = 9.6
 )
 
+brain_theme <- function(base_size = 11) {
+  theme_void(base_size = base_size) +
+    theme(
+      plot.background = element_rect(fill = bg_fill, color = NA),
+      panel.background = element_rect(fill = panel_fill, color = NA),
+      legend.background = element_rect(fill = bg_fill, color = NA),
+      legend.key = element_rect(fill = panel_fill, color = NA),
+      plot.title = element_text(face = "bold", color = ink_color),
+      plot.subtitle = element_text(color = muted_color),
+      legend.title = element_text(face = "bold", color = ink_color),
+      legend.text = element_text(color = ink_color),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+}
+
+touchpoint_data_root <- resolve_repo_path(params$data_root, must_exist = TRUE)
+touchpoint_retained_patients <- sort(unique(as.character(yeo17_summary$patient_id)))
+touchpoint_atlas_paths_all <- sort(list.files(touchpoint_data_root, pattern = "^Atlas\\.tsv$", recursive = TRUE, full.names = TRUE))
+touchpoint_atlas_patient_ids <- vapply(
+  touchpoint_atlas_paths_all,
+  function(atlas_path) basename(dirname(dirname(atlas_path))),
+  character(1)
+)
+touchpoint_atlas_paths <- touchpoint_atlas_paths_all[touchpoint_atlas_patient_ids %in% touchpoint_retained_patients]
+if (length(touchpoint_atlas_paths) == 0) {
+  stop(paste0("No retained-cohort Atlas.tsv files were found under: ", touchpoint_data_root))
+}
+missing_touchpoint_patients <- setdiff(touchpoint_retained_patients, touchpoint_atlas_patient_ids)
+if (length(missing_touchpoint_patients) > 0) {
+  stop(paste(
+    "Missing Atlas.tsv for retained patients:",
+    paste(missing_touchpoint_patients, collapse = ", ")
+  ))
+}
+
+yeo17_touchpoint_mapping <- tibble(
+  network = yeo17_levels,
+  region = paste0("17Networks_", seq_along(yeo17_levels))
+)
+
+parse_touchpoint_label <- function(value) {
+  normalized <- trimws(as.character(value))
+  if (is.na(normalized) || !nzchar(normalized) || toupper(normalized) == "N/A") {
+    return(list(network = NA_character_, hemi = NA_character_))
+  }
+  tokens <- strsplit(normalized, "\\s+")[[1]]
+  if (length(tokens) == 0) {
+    return(list(network = NA_character_, hemi = NA_character_))
+  }
+  network_token <- tokens[[1]]
+  hemi_token <- if (length(tokens) > 1) tokens[[length(tokens)]] else NA_character_
+  network <- sub("_.*$", "", network_token)
+  hemi <- if (!is.na(hemi_token) && hemi_token %in% c("L", "R")) ifelse(hemi_token == "L", "lh", "rh") else NA_character_
+  list(network = network, hemi = hemi)
+}
+
+parse_mni_triplet <- function(value) {
+  normalized <- trimws(as.character(value))
+  if (is.na(normalized) || !nzchar(normalized) || toupper(normalized) == "N/A") {
+    return(c(NA_real_, NA_real_, NA_real_))
+  }
+  cleaned <- gsub("\\[|\\]", "", normalized)
+  parts <- strsplit(cleaned, ",", fixed = TRUE)[[1]]
+  if (length(parts) != 3) {
+    return(c(NA_real_, NA_real_, NA_real_))
+  }
+  suppressWarnings(as.numeric(trimws(parts)))
+}
+
+stable_alias_table <- function(patient_ids) {
+  ids <- sort(unique(as.character(patient_ids)))
+  tibble(
+    patient_id = ids,
+    patient_alias = sprintf("sub-%02d", seq_along(ids))
+  )
+}
+
+touchpoint_frames <- lapply(touchpoint_atlas_paths, function(atlas_path) {
+  patient_id <- basename(dirname(dirname(atlas_path)))
+  atlas_df <- read.csv(atlas_path, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
+  required_cols <- c("Channel", "MNI", "cortex_319663V:Schaefer_200_17net")
+  missing_cols <- setdiff(required_cols, names(atlas_df))
+  if (length(missing_cols) > 0) {
+    stop(paste("Missing columns in", atlas_path, ":", paste(missing_cols, collapse = ", ")))
+  }
+
+  parsed <- lapply(atlas_df[["cortex_319663V:Schaefer_200_17net"]], parse_touchpoint_label)
+  network <- vapply(parsed, `[[`, character(1), "network")
+  hemi <- vapply(parsed, `[[`, character(1), "hemi")
+  mni_matrix <- t(vapply(atlas_df[["MNI"]], parse_mni_triplet, numeric(3)))
+
+  tibble(
+    patient_id = patient_id,
+    channel = atlas_df[["Channel"]],
+    raw_label = atlas_df[["cortex_319663V:Schaefer_200_17net"]],
+    network = network,
+    hemi = hemi,
+    mni_x = mni_matrix[, 1],
+    mni_y = mni_matrix[, 2],
+    mni_z = mni_matrix[, 3]
+  )
+})
+
+touchpoint_all <- bind_rows(touchpoint_frames) %>%
+  mutate(patient_id = as.character(patient_id))
+
+touchpoint_alias <- stable_alias_table(touchpoint_all$patient_id)
+touchpoint_all <- touchpoint_all %>%
+  left_join(touchpoint_alias, by = "patient_id")
+
+touchpoint_yeo17_mapped <- touchpoint_all %>%
+  filter(!is.na(network), network %in% yeo17_levels, !is.na(hemi)) %>%
+  mutate(
+    network = factor(network, levels = yeo17_levels),
+    hemi = factor(hemi, levels = c("lh", "rh"))
+  )
+
+touchpoint_mni_mapped <- touchpoint_yeo17_mapped %>%
+  filter(is.finite(mni_x), is.finite(mni_y), is.finite(mni_z))
+
+if (nrow(touchpoint_yeo17_mapped) == 0) {
+  stop("No Yeo17-mapped SEEG touchpoints were parsed from Atlas.tsv files.")
+}
+if (nrow(touchpoint_mni_mapped) == 0) {
+  stop("No SEEG touchpoints had valid MNI coordinates after parsing Atlas.tsv files.")
+}
+
+load_standard_mni_brain_mask <- function() {
+  nilearn_datasets <- reticulate::import("nilearn.datasets")
+  mask_img <- nilearn_datasets$load_mni152_brain_mask(resolution = 2L)
+  mask_data <- reticulate::py_to_r(mask_img$get_fdata())
+  mask_affine <- reticulate::py_to_r(mask_img$affine)
+  list(data = mask_data, affine = mask_affine)
+}
+
+standard_mni_mask <- load_standard_mni_brain_mask()
+
+mask_projection_contours <- function(mask_data, affine, projection = c("axial", "coronal", "sagittal")) {
+  projection <- match.arg(projection)
+  x_coords <- affine[1, 4] + affine[1, 1] * seq(0, dim(mask_data)[1] - 1)
+  y_coords <- affine[2, 4] + affine[2, 2] * seq(0, dim(mask_data)[2] - 1)
+  z_coords <- affine[3, 4] + affine[3, 3] * seq(0, dim(mask_data)[3] - 1)
+  plane <- switch(
+    projection,
+    axial = apply(mask_data > 0, c(1, 2), any),
+    coronal = apply(mask_data > 0, c(1, 3), any),
+    sagittal = apply(mask_data > 0, c(2, 3), any)
+  )
+  contour_data <- switch(
+    projection,
+    axial = contourLines(x_coords, y_coords, plane + 0, levels = 0.5),
+    coronal = contourLines(x_coords, z_coords, plane + 0, levels = 0.5),
+    sagittal = contourLines(y_coords, z_coords, plane + 0, levels = 0.5)
+  )
+  if (length(contour_data) == 0) {
+    return(tibble(x = numeric(), y = numeric(), contour_id = integer()))
+  }
+  bind_rows(lapply(seq_along(contour_data), function(index) {
+    contour <- contour_data[[index]]
+    tibble(
+      x = contour$x,
+      y = contour$y,
+      contour_id = index
+    )
+  }))
+}
+
+standard_mni_contours <- list(
+  axial = mask_projection_contours(standard_mni_mask$data, standard_mni_mask$affine, "axial"),
+  coronal = mask_projection_contours(standard_mni_mask$data, standard_mni_mask$affine, "coronal"),
+  sagittal = mask_projection_contours(standard_mni_mask$data, standard_mni_mask$affine, "sagittal")
+)
+
+touchpoint_total_contacts <- nrow(touchpoint_all)
+touchpoint_yeo17_contacts <- nrow(touchpoint_yeo17_mapped)
+touchpoint_mni_contacts <- nrow(touchpoint_mni_mapped)
+touchpoint_patient_count <- dplyr::n_distinct(touchpoint_all$patient_id)
+touchpoint_mapped_fraction <- if (touchpoint_total_contacts > 0) {
+  touchpoint_yeo17_contacts / touchpoint_total_contacts
+} else {
+  NA_real_
+}
+
+touchpoint_brain_summary <- touchpoint_yeo17_mapped %>%
+  left_join(yeo17_touchpoint_mapping, by = "network") %>%
+  filter(!is.na(region), !is.na(hemi)) %>%
+  mutate(label = paste0(as.character(hemi), "_", region)) %>%
+  group_by(label, hemi, network, region) %>%
+  summarise(
+    n_contacts = n(),
+    n_patients = dplyr::n_distinct(patient_id),
+    .groups = "drop"
+  )
+
+touchpoint_brain_summary <- tidyr::expand_grid(
+  hemi = factor(c("lh", "rh"), levels = c("lh", "rh")),
+  network = factor(yeo17_levels, levels = yeo17_levels)
+) %>%
+  left_join(yeo17_touchpoint_mapping, by = "network") %>%
+  mutate(label = paste0(as.character(hemi), "_", region)) %>%
+  left_join(
+    touchpoint_brain_summary,
+    by = c("label", "hemi", "network", "region")
+  ) %>%
+  mutate(
+    n_contacts = tidyr::replace_na(n_contacts, 0L),
+    n_patients = tidyr::replace_na(n_patients, 0L),
+    hemi = factor(hemi, levels = c("lh", "rh")),
+    network = factor(network, levels = yeo17_levels)
+  ) %>%
+  arrange(hemi, network)
+
+touchpoint_brain_plot_data <- touchpoint_brain_summary %>%
+  select(label, n_contacts)
+
+touchpoint_network_summary <- touchpoint_yeo17_mapped %>%
+  group_by(network) %>%
+  summarise(
+    n_contacts = n(),
+    n_patients = dplyr::n_distinct(patient_id),
+    .groups = "drop"
+  ) %>%
+  tidyr::complete(
+    network = factor(yeo17_levels, levels = yeo17_levels),
+    fill = list(n_contacts = 0, n_patients = 0)
+  ) %>%
+  mutate(network = factor(network, levels = yeo17_levels)) %>%
+  arrange(desc(n_contacts), network)
+
+touchpoint_patient_summary <- touchpoint_all %>%
+  group_by(patient_id, patient_alias) %>%
+  summarise(
+    total_contacts = n(),
+    mapped_contacts = sum(network %in% yeo17_levels & !is.na(hemi)),
+    mapped_fraction = ifelse(total_contacts > 0, mapped_contacts / total_contacts, NA_real_),
+    n_networks = dplyr::n_distinct(network[!is.na(network)]),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mapped_contacts), desc(n_networks), patient_id)
+
+touchpoint_patient_order <- touchpoint_patient_summary$patient_alias
+touchpoint_patient_network <- touchpoint_yeo17_mapped %>%
+  count(patient_alias, network, name = "n_contacts") %>%
+  tidyr::complete(
+    patient_alias = touchpoint_patient_order,
+    network = factor(yeo17_levels, levels = yeo17_levels),
+    fill = list(n_contacts = 0)
+  ) %>%
+  mutate(
+    patient_alias = factor(patient_alias, levels = rev(touchpoint_patient_order)),
+    network = factor(network, levels = yeo17_levels)
+  )
+
+touchpoint_fill_limit <- max(
+  c(
+    touchpoint_brain_summary$n_contacts,
+    touchpoint_network_summary$n_contacts,
+    touchpoint_patient_network$n_contacts
+  ),
+  na.rm = TRUE
+)
+if (!is.finite(touchpoint_fill_limit) || touchpoint_fill_limit <= 0) {
+  touchpoint_fill_limit <- 1
+}
+
+touchpoint_brain_plot <- ggplot(touchpoint_brain_plot_data) +
+  geom_brain(
+    atlas = ggsegYeo2011::yeo17(),
+    position = position_brain(hemi ~ view),
+    aes(fill = n_contacts),
+    colour = "grey35",
+    size = 0.08
+  ) +
+  scale_fill_gradient(
+    low = "#F7EFE2",
+    high = warm_high,
+    limits = c(0, touchpoint_fill_limit),
+    oob = scales::squish,
+    name = "Contacts"
+  ) +
+  labs(
+    title = "Scheme 1. SEEG touchpoint density on the Yeo17 template",
+    subtitle = sprintf(
+      "%d patients | %d atlas rows | %d mapped Yeo17 touchpoints (%.1f%% mapped)",
+      touchpoint_patient_count,
+      touchpoint_total_contacts,
+      touchpoint_yeo17_contacts,
+      100 * touchpoint_mapped_fraction
+    )
+  ) +
+  brain_theme()
+
+build_mni_density_grid <- function(frame, x_col, y_col, grid_n = 120) {
+  plot_df <- frame %>%
+    select(x = all_of(x_col), y = all_of(y_col)) %>%
+    filter(is.finite(x), is.finite(y))
+  if (nrow(plot_df) < 2 || length(unique(plot_df$x)) < 2 || length(unique(plot_df$y)) < 2) {
+    return(tibble(x = numeric(), y = numeric(), density = numeric()))
+  }
+  density <- MASS::kde2d(
+    plot_df$x,
+    plot_df$y,
+    n = grid_n,
+    lims = c(range(plot_df$x, na.rm = TRUE), range(plot_df$y, na.rm = TRUE))
+  )
+  density_grid <- tibble(
+    x = rep(density$x, times = length(density$y)),
+    y = rep(density$y, each = length(density$x))
+  )
+  density_grid$density <- as.vector(density$z)
+  max_density <- max(density_grid$density, na.rm = TRUE)
+  if (is.finite(max_density) && max_density > 0) {
+    density_grid$density <- density_grid$density / max_density
+  }
+  density_grid
+}
+
+build_mni_projection_plot <- function(frame, x_col, y_col, x_label, y_label, title, show_legend = FALSE) {
+  density_grid <- build_mni_density_grid(frame, x_col, y_col)
+  ggplot() +
+    geom_raster(
+      data = density_grid,
+      aes(x = x, y = y, fill = density),
+      interpolate = TRUE
+    ) +
+    geom_contour(
+      data = density_grid,
+      aes(x = x, y = y, z = density),
+      bins = 6,
+      color = scales::alpha(ink_color, 0.30),
+      linewidth = 0.18
+    ) +
+    geom_point(
+      data = frame,
+      aes(x = .data[[x_col]], y = .data[[y_col]]),
+      color = scales::alpha(ink_color, 0.14),
+      size = 0.34
+    ) +
+    scale_fill_gradient(
+      low = panel_fill,
+      high = hot_high,
+      limits = c(0, 1),
+      oob = scales::squish,
+      name = "Relative\ndensity"
+    ) +
+    coord_equal(expand = FALSE) +
+    labs(title = title, x = x_label, y = y_label) +
+    validation_theme() +
+    geom_path(
+      data = switch(
+        title,
+        "Axial" = standard_mni_contours$axial,
+        "Coronal" = standard_mni_contours$coronal,
+        "Sagittal" = standard_mni_contours$sagittal,
+        standard_mni_contours$axial
+      ),
+      aes(x = x, y = y, group = contour_id),
+      inherit.aes = FALSE,
+      color = ink_color,
+      linewidth = 0.45,
+      lineend = "round"
+    ) +
+    theme(
+      plot.title = element_text(face = "bold", color = ink_color, size = rel(1.02)),
+      plot.title.position = "plot"
+    ) +
+    theme(legend.position = if (show_legend) "bottom" else "none")
+}
+
+touchpoint_mni_axial <- build_mni_projection_plot(
+  touchpoint_mni_mapped,
+  "mni_x",
+  "mni_y",
+  "MNI X (mm)",
+  "MNI Y (mm)",
+  "Axial",
+  show_legend = TRUE
+)
+
+touchpoint_mni_coronal <- build_mni_projection_plot(
+  touchpoint_mni_mapped,
+  "mni_x",
+  "mni_z",
+  "MNI X (mm)",
+  "MNI Z (mm)",
+  "Coronal"
+)
+
+touchpoint_mni_sagittal <- build_mni_projection_plot(
+  touchpoint_mni_mapped,
+  "mni_y",
+  "mni_z",
+  "MNI Y (mm)",
+  "MNI Z (mm)",
+  "Sagittal"
+)
+
+touchpoint_mni_plot <- (
+  touchpoint_mni_axial +
+  touchpoint_mni_coronal +
+  touchpoint_mni_sagittal +
+  plot_layout(nrow = 1)
+) +
+  plot_annotation(
+    title = "Scheme 2. SEEG touchpoint density in MNI space",
+    subtitle = sprintf(
+      "%d mapped Yeo17 touchpoints shown as normalized density projections",
+      touchpoint_mni_contacts
+    ),
+    theme = theme(plot.background = element_rect(fill = bg_fill, color = NA))
+  )
+
+touchpoint_network_bar <- ggplot(
+  touchpoint_network_summary,
+  aes(x = reorder(network, -n_contacts), y = n_contacts, fill = n_contacts)
+) +
+  geom_col(width = 0.72, color = panel_fill, linewidth = 0.35) +
+  geom_text(aes(label = n_contacts), hjust = -0.10, color = ink_color, size = 3.0) +
+  coord_flip() +
+  scale_fill_gradient(
+    low = "#F7EFE2",
+    high = warm_high,
+    limits = c(0, touchpoint_fill_limit),
+    oob = scales::squish,
+    name = "Contacts"
+  ) +
+  expand_limits(y = touchpoint_fill_limit * 1.03) +
+  labs(x = "Yeo17 network", y = "Touchpoints") +
+  validation_theme() +
+  theme(legend.position = "none")
+
+touchpoint_patient_heatmap <- ggplot(
+  touchpoint_patient_network,
+  aes(x = network, y = patient_alias, fill = n_contacts)
+) +
+  geom_tile(color = scales::alpha(grid_color, 0.85), linewidth = 0.35) +
+  geom_text(
+    aes(label = ifelse(n_contacts > 0, n_contacts, "")),
+    color = ink_color,
+    size = 2.45
+  ) +
+  scale_fill_gradient(
+    low = "#F7EFE2",
+    high = warm_high,
+    limits = c(0, touchpoint_fill_limit),
+    oob = scales::squish,
+    name = "Contacts"
+  ) +
+  labs(x = "Yeo17 network", y = "Patient") +
+  validation_theme() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = rel(0.80)),
+    legend.position = "none"
+  )
+
+touchpoint_right_panel <- (
+  touchpoint_network_bar /
+  touchpoint_patient_heatmap
+) +
+  plot_layout(heights = c(0.75, 1.25))
+
+touchpoint_overview_plot <- (
+  touchpoint_brain_plot |
+    touchpoint_right_panel
+) +
+  plot_layout(widths = c(1.05, 1.10)) +
+  plot_annotation(
+    title = "Scheme 3. SEEG touchpoint overview",
+    subtitle = sprintf(
+      "%d patients | %d total atlas rows | %d mapped Yeo17 touchpoints | %d/%d networks covered",
+      touchpoint_patient_count,
+      touchpoint_total_contacts,
+      touchpoint_yeo17_contacts,
+      sum(touchpoint_network_summary$n_contacts > 0),
+      length(yeo17_levels)
+    ),
+    theme = theme(plot.background = element_rect(fill = bg_fill, color = NA))
+  )
+
 yeo17_path <- file.path(output_dir, paste0(output_stem, "_yeo17_cohort_characterization.svg"))
 transition_path <- file.path(output_dir, paste0(output_stem, "_field_state_transition_matrix.svg"))
 repro_path <- file.path(output_dir, paste0(output_stem, "_field_state_reproducibility.svg"))
@@ -571,6 +1062,9 @@ lag_path <- file.path(output_dir, paste0(output_stem, "_lag_decomposition.svg"))
 group_topo_path <- file.path(output_dir, paste0(output_stem, "_conditioned_eeg_group_topographies.svg"))
 rep_topo_path <- file.path(output_dir, paste0(output_stem, "_conditioned_eeg_representative_subjects.svg"))
 combined_topo_path <- file.path(output_dir, paste0(output_stem, "_conditioned_eeg_examples.svg"))
+touchpoint_brain_path <- file.path(output_dir, paste0(output_stem, "_seeg_touchpoint_yeo17_density.svg"))
+touchpoint_mni_path <- file.path(output_dir, paste0(output_stem, "_seeg_touchpoint_mni_density.svg"))
+touchpoint_overview_path <- file.path(output_dir, paste0(output_stem, "_seeg_touchpoint_overview.svg"))
 
 save_svg(yeo17_combined, yeo17_path, width = 15.2, height = 8.4)
 save_svg(transition_plot, transition_path, width = 6.4, height = 5.6)
@@ -581,6 +1075,9 @@ save_svg(lag_decomposition, lag_path, width = 13.0, height = 8.9)
 save_svg(group_topography_plot, group_topo_path, width = 10.8, height = 3.5)
 save_svg(representative_topography_plot, rep_topo_path, width = 10.8, height = 7.6)
 save_svg(conditioned_examples_plot, combined_topo_path, width = 10.8, height = 9.9)
+save_svg(touchpoint_brain_plot, touchpoint_brain_path, width = 11.2, height = 7.4)
+save_svg(touchpoint_mni_plot, touchpoint_mni_path, width = 14.2, height = 5.3)
+save_svg(touchpoint_overview_plot, touchpoint_overview_path, width = 14.4, height = 10.2)
 
 figure_manifest <- tibble(
   figure_output = c(
@@ -592,7 +1089,10 @@ figure_manifest <- tibble(
     "lag_decomposition",
     "conditioned_eeg_group_topographies",
     "conditioned_eeg_representative_subjects",
-    "conditioned_eeg_examples"
+    "conditioned_eeg_examples",
+    "seeg_touchpoint_yeo17_density",
+    "seeg_touchpoint_mni_density",
+    "seeg_touchpoint_overview"
   ),
   file_name = basename(c(
     yeo17_path,
@@ -603,7 +1103,10 @@ figure_manifest <- tibble(
     lag_path,
     group_topo_path,
     rep_topo_path,
-    combined_topo_path
+    combined_topo_path,
+    touchpoint_brain_path,
+    touchpoint_mni_path,
+    touchpoint_overview_path
   )),
   path = normalizePath(c(
     yeo17_path,
@@ -614,7 +1117,10 @@ figure_manifest <- tibble(
     lag_path,
     group_topo_path,
     rep_topo_path,
-    combined_topo_path
+    combined_topo_path,
+    touchpoint_brain_path,
+    touchpoint_mni_path,
+    touchpoint_overview_path
   ), winslash = "/", mustWork = FALSE)
 )
 
