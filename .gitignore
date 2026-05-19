@@ -13,6 +13,8 @@ artifacts*/
 results/
 manuscripts/
 *cache*
+docs/
+.mne-home/
 
 # Virtual environments
 .venv
