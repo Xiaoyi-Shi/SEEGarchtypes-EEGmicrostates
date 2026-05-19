@@ -15,6 +15,7 @@ manuscripts/
 *cache*
 docs/
 .mne-home/
+*.html
 
 # Virtual environments
 .venv
